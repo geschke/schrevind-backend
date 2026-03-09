@@ -1,0 +1,25 @@
+services:
+  fyndmark:
+    image: fyndmark:latest
+    container_name: fyndmark
+    restart: unless-stopped
+
+    ports:
+      - "8080:8080"
+
+    volumes:
+      # Config
+      - ./config.yaml:/config/config.yaml:ro
+
+      # SQLite database directory
+      - ./data:/app/data
+
+      # Hugo website checkout / working directory
+      - ./website:/app/website
+
+    environment:
+      # optional, but usually useful
+      TZ: Europe/Berlin
+
+    # serve is already default via Dockerfile
+    # command: ["serve"]
