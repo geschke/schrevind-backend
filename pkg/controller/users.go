@@ -1,4 +1,4 @@
-﻿package controller
+package controller
 
 import (
 	"context"
@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/geschke/fyndmark/config"
-	"github.com/geschke/fyndmark/pkg/cors"
-	"github.com/geschke/fyndmark/pkg/db"
-	"github.com/geschke/fyndmark/pkg/users"
+	"github.com/geschke/schrevind/config"
+	"github.com/geschke/schrevind/pkg/cors"
+	"github.com/geschke/schrevind/pkg/db"
+	"github.com/geschke/schrevind/pkg/users"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
 )
@@ -34,7 +34,7 @@ func NewUsersController(database *db.DB, store sessions.Store, sessionName strin
 // Options handles the CORS preflight request.
 func (ct UsersController) Options(c *gin.Context) {
 	// Allow preflight for browser-based clients.
-	_ = cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins)
+	_ = cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins)
 }
 
 type updateUserRequest struct {
@@ -109,7 +109,7 @@ func parseUserID(c *gin.Context) (int64, bool) {
 
 // GET /api/users/list
 func (ct UsersController) GetList(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 
@@ -138,7 +138,7 @@ func (ct UsersController) GetList(c *gin.Context) {
 
 // GET /api/users/:id
 func (ct UsersController) GetByID(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 
@@ -174,7 +174,7 @@ func (ct UsersController) GetByID(c *gin.Context) {
 
 // POST /api/users/update/:id
 func (ct UsersController) PostUpdate(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 	if !ct.ensureAuthorized(c) {
@@ -270,7 +270,7 @@ func (ct UsersController) PostUpdate(c *gin.Context) {
 
 // POST /api/users/update-password/:id
 func (ct UsersController) PostUpdatePassword(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 	if !ct.ensureAuthorized(c) {
@@ -348,7 +348,7 @@ func (ct UsersController) PostUpdatePassword(c *gin.Context) {
 
 // POST /api/users/add
 func (ct UsersController) PostAdd(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 	if !ct.ensureAuthorized(c) {
@@ -435,7 +435,7 @@ func (ct UsersController) PostAdd(c *gin.Context) {
 
 // POST /api/users/delete/:id
 func (ct UsersController) PostDelete(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 	if !ct.ensureAuthorized(c) {

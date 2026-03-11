@@ -1,4 +1,4 @@
-﻿package controller
+package controller
 
 import (
 	"context"
@@ -8,10 +8,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/geschke/fyndmark/config"
-	"github.com/geschke/fyndmark/pkg/cors"
-	"github.com/geschke/fyndmark/pkg/db"
-	"github.com/geschke/fyndmark/pkg/users"
+	"github.com/geschke/schrevind/config"
+	"github.com/geschke/schrevind/pkg/cors"
+	"github.com/geschke/schrevind/pkg/db"
+	"github.com/geschke/schrevind/pkg/users"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
 )
@@ -40,7 +40,7 @@ type loginRequest struct {
 // OptionsLogin handles the CORS preflight request.
 func (ct AuthController) OptionsLogin(c *gin.Context) {
 	// Allow preflight for browser-based clients.
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 }
@@ -48,21 +48,21 @@ func (ct AuthController) OptionsLogin(c *gin.Context) {
 // OptionsLogout handles the CORS preflight request.
 func (ct AuthController) OptionsLogout(c *gin.Context) {
 	// Allow preflight for browser-based clients.
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 }
 
 // OptionsMe handles the CORS preflight request.
 func (ct AuthController) OptionsMe(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 }
 
 // PostLogin performs its package-specific operation.
 func (ct AuthController) PostLogin(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 
@@ -121,7 +121,7 @@ func (ct AuthController) PostLogin(c *gin.Context) {
 	sess.Values["firstname"] = u.FirstName
 	sess.Values["lastname"] = u.LastName
 
-	maxAgeDays := config.Cfg.WebAdmin.CookieMaxAgeDays
+	maxAgeDays := config.Cfg.WebUI.CookieMaxAgeDays
 	if maxAgeDays <= 0 {
 		maxAgeDays = 30
 	}
@@ -131,8 +131,8 @@ func (ct AuthController) PostLogin(c *gin.Context) {
 		Path:     "/",
 		MaxAge:   maxAge,
 		HttpOnly: true,
-		Secure:   config.Cfg.WebAdmin.CookieSecure,
-		SameSite: parseSameSite(config.Cfg.WebAdmin.CookieSameSite),
+		Secure:   config.Cfg.WebUI.CookieSecure,
+		SameSite: parseSameSite(config.Cfg.WebUI.CookieSameSite),
 	}
 
 	if err := sess.Save(c.Request, c.Writer); err != nil {
@@ -152,7 +152,7 @@ func (ct AuthController) PostLogin(c *gin.Context) {
 
 // PostLogout performs its package-specific operation.
 func (ct AuthController) PostLogout(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 
@@ -175,8 +175,8 @@ func (ct AuthController) PostLogout(c *gin.Context) {
 		Path:     "/",
 		MaxAge:   -1,
 		HttpOnly: true,
-		Secure:   config.Cfg.WebAdmin.CookieSecure,
-		SameSite: parseSameSite(config.Cfg.WebAdmin.CookieSameSite),
+		Secure:   config.Cfg.WebUI.CookieSecure,
+		SameSite: parseSameSite(config.Cfg.WebUI.CookieSameSite),
 	}
 
 	if err := sess.Save(c.Request, c.Writer); err != nil {
@@ -189,7 +189,7 @@ func (ct AuthController) PostLogout(c *gin.Context) {
 
 // GetMe returns the current authenticated user for a valid session.
 func (ct AuthController) GetMe(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebAdmin.CORSAllowedOrigins) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
 
@@ -236,8 +236,8 @@ func (ct AuthController) GetMe(c *gin.Context) {
 			Path:     "/",
 			MaxAge:   -1,
 			HttpOnly: true,
-			Secure:   config.Cfg.WebAdmin.CookieSecure,
-			SameSite: parseSameSite(config.Cfg.WebAdmin.CookieSameSite),
+			Secure:   config.Cfg.WebUI.CookieSecure,
+			SameSite: parseSameSite(config.Cfg.WebUI.CookieSameSite),
 		}
 		_ = sess.Save(c.Request, c.Writer)
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
