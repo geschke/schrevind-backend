@@ -1,11 +1,11 @@
-﻿package cmd
+package cmd
 
 import (
 	"fmt"
 	"log"
 	"os"
 
-	"github.com/geschke/fyndmark/config"
+	"github.com/geschke/schrevind/pkg/config"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 )
@@ -14,23 +14,17 @@ import (
 var (
 	cfgFile string
 	rootCmd = &cobra.Command{
-		Use:   "fyndmark",
-		Short: "Lightweight self-hosted comment backend for Hugo sites (Git-based workflow).",
-		Long: `fyndmark is a small, self-hosted comment backend designed for Hugo websites.
+		Use:   "schrevind",
+		Short: "Backend service for schrevind.",
+		Long: `schrevind is a backend service with a small command-line interface.
 
-It accepts comment submissions, stores them in SQLite, and generates
-markdown files directly inside each page bundle under content/.../comments/.
-These files can be committed and pushed to Git automatically.
-
-Optionally, Hugo can be executed after generation, or the site can be
-built externally (e.g. via CI/CD or GitHub Actions).
-
-Configuration is file-based (YAML/JSON/TOML) or via environment variables.
+It loads configuration from a file, environment variables, and CLI flags,
+opens the SQLite database, and starts the HTTP server when requested.
 
 Typical usage:
-  fyndmark serve --config /path/to/config.yaml
+  schrevind serve --config /path/to/config.yaml
 
-fyndmark focuses on simplicity and full control — just files, Git, and Hugo.`,
+schrevind keeps the CLI intentionally small and focused.`,
 
 		// Uncomment the following line if your bare application
 		// has an action associated with it:

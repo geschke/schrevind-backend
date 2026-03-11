@@ -3,7 +3,7 @@ Copyright © 2026 Ralf Geschke <ralf@kuerbis.org>
 */
 package main
 
-import "github.com/geschke/fyndmark/cmd"
+import "github.com/geschke/schrevind/cmd"
 
 func main() {
 	cmd.Execute()

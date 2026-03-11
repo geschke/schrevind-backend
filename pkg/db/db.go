@@ -65,85 +65,144 @@ func (d *DB) Migrate() error {
 
 	stmts := []string{
 		`
-CREATE TABLE IF NOT EXISTS comments (
-  id            TEXT PRIMARY KEY,
-  site_id       INTEGER NOT NULL,
-  entry_id      TEXT,
-  post_path     TEXT NOT NULL,
-  parent_id     TEXT,
-  status        TEXT NOT NULL,
-  author        TEXT NOT NULL,
-  email         TEXT NOT NULL,
-  author_url    TEXT,
-  body          TEXT NOT NULL,
-	ip            TEXT NOT NULL DEFAULT '',
-  created_at    INTEGER NOT NULL,
-  approved_at   INTEGER,
-  rejected_at   INTEGER,
-	updated_at    INTEGER NOT NULL,
-  
-	FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE,
-	FOREIGN KEY(parent_id) REFERENCES comments(id) ON DELETE CASCADE
-	
-);
-
-`,
-		`CREATE INDEX IF NOT EXISTS idx_comments_site_status_created ON comments(site_id, status, created_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_comments_site_post_created   ON comments(site_id, post_path, created_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_comments_site_parent_created ON comments(site_id, parent_id, created_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_comments_site_ip_created ON comments(site_id, ip, created_at);`,
-		`
-CREATE TABLE IF NOT EXISTS pipeline_runs (
-  id                  INTEGER PRIMARY KEY,
-  site_id             INTEGER NOT NULL,
-  trigger_comment_id  TEXT,
-
-  state               TEXT NOT NULL,        -- queued|running|success|failed
-  step                TEXT,                -- checkout|hugo|commit|push
-  error_message       TEXT,
-
-  created_at          INTEGER NOT NULL,
-  started_at          INTEGER,
-  finished_at         INTEGER
-);
-`,
-		`CREATE INDEX IF NOT EXISTS idx_runs_site_created  ON pipeline_runs(site_id, created_at);`,
-		`CREATE INDEX IF NOT EXISTS idx_runs_state_created ON pipeline_runs(state, created_at);`,
-		`
 CREATE TABLE IF NOT EXISTS users (
-  id            INTEGER PRIMARY KEY,
-  password      TEXT NOT NULL,
-  firstname     TEXT,
-  lastname      TEXT,
-  email         TEXT NOT NULL,
-  created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  password      TEXT NOT NULL DEFAULT '',
+  first_name    TEXT NOT NULL DEFAULT '',
+  last_name     TEXT NOT NULL DEFAULT '',
+  email         TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'active',
+  created_at    INTEGER NOT NULL DEFAULT 0,
+  updated_at    INTEGER NOT NULL DEFAULT 0
 );
 `,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email    ON users(email);`,
-		`CREATE INDEX        IF NOT EXISTS idx_users_updated  ON users(updated_at);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email);`,
+		`CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);`,
+
 		`
-CREATE TABLE IF NOT EXISTS sites (
-  id            INTEGER PRIMARY KEY,
-	site_key			TEXT NOT NULL,
-  title          TEXT NOT NULL DEFAULT '',
-	status      TEXT NOT NULL DEFAULT '',
-  created_at  INTEGER NOT NULL,
-  updated_at  INTEGER NOT NULL
-	);
-`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_sites_key ON sites(site_key);`,
-		`CREATE INDEX IF NOT EXISTS idx_sites_updated ON sites(updated_at);`,
-		`
-CREATE TABLE IF NOT EXISTS user_sites (
-  user_id INTEGER NOT NULL,
-  site_id INTEGER NOT NULL,
-  PRIMARY KEY(user_id, site_id),
-  FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
-  FOREIGN KEY(site_id) REFERENCES sites(id) ON DELETE CASCADE
+CREATE TABLE IF NOT EXISTS depots (
+  id             INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id        INTEGER NOT NULL,
+  name           TEXT NOT NULL DEFAULT '',
+  broker_name    TEXT NOT NULL DEFAULT '',
+  account_number TEXT NOT NULL DEFAULT '',
+  base_currency  TEXT NOT NULL DEFAULT 'EUR',
+  description    TEXT NOT NULL DEFAULT '',
+  status         TEXT NOT NULL DEFAULT 'active',
+  created_at     INTEGER NOT NULL DEFAULT 0,
+  updated_at     INTEGER NOT NULL DEFAULT 0,
+
+  FOREIGN KEY(user_id) REFERENCES users(id)
 );
 `,
-		`CREATE INDEX IF NOT EXISTS idx_user_sites_site ON user_sites(site_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_depots_user_id ON depots(user_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_depots_status ON depots(status);`,
+		`CREATE INDEX IF NOT EXISTS idx_depots_user_status ON depots(user_id, status);`,
+
+		`
+CREATE TABLE IF NOT EXISTS securities (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  name          TEXT NOT NULL DEFAULT '',
+  isin          TEXT NOT NULL DEFAULT '',
+  wkn           TEXT NOT NULL DEFAULT '',
+  symbol        TEXT NOT NULL DEFAULT '',
+  status        TEXT NOT NULL DEFAULT 'active',
+  created_at    INTEGER NOT NULL DEFAULT 0,
+  updated_at    INTEGER NOT NULL DEFAULT 0
+);
+`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_securities_isin ON securities(isin);`,
+		`CREATE INDEX IF NOT EXISTS idx_securities_wkn ON securities(wkn);`,
+		`CREATE INDEX IF NOT EXISTS idx_securities_symbol ON securities(symbol);`,
+		`CREATE INDEX IF NOT EXISTS idx_securities_name ON securities(name);`,
+		`CREATE INDEX IF NOT EXISTS idx_securities_status ON securities(status);`,
+
+		`
+CREATE TABLE IF NOT EXISTS withholding_tax_defaults (
+  id                                      INTEGER PRIMARY KEY AUTOINCREMENT,
+  depot_id                                INTEGER,
+  country_code                            TEXT NOT NULL DEFAULT '',
+  country_name                            TEXT NOT NULL DEFAULT '',
+  withholding_tax_percent_default         TEXT NOT NULL DEFAULT '',
+  withholding_tax_percent_credit_default  TEXT NOT NULL DEFAULT '',
+  created_at                              INTEGER NOT NULL DEFAULT 0,
+  updated_at                              INTEGER NOT NULL DEFAULT 0,
+
+  FOREIGN KEY(depot_id) REFERENCES depots(id)
+);
+`,
+		`CREATE INDEX IF NOT EXISTS idx_withholding_tax_defaults_depot_id ON withholding_tax_defaults(depot_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_withholding_tax_defaults_country_code ON withholding_tax_defaults(country_code);`,
+		`CREATE INDEX IF NOT EXISTS idx_withholding_tax_defaults_depot_country ON withholding_tax_defaults(depot_id, country_code);`,
+
+		`
+CREATE TABLE IF NOT EXISTS dividend_entries (
+  id                                       INTEGER PRIMARY KEY AUTOINCREMENT,
+
+  user_id                                  INTEGER NOT NULL,
+  depot_id                                 INTEGER NOT NULL,
+  security_id                              INTEGER NOT NULL,
+
+  pay_date                                 TEXT NOT NULL DEFAULT '',
+  ex_date                                  TEXT NOT NULL DEFAULT '',
+
+  security_name                            TEXT NOT NULL DEFAULT '',
+  security_isin                            TEXT NOT NULL DEFAULT '',
+  security_wkn                             TEXT NOT NULL DEFAULT '',
+  security_symbol                          TEXT NOT NULL DEFAULT '',
+
+  quantity                                 TEXT NOT NULL DEFAULT '',
+
+  dividend_per_unit_amount                 TEXT NOT NULL DEFAULT '',
+  dividend_per_unit_currency               TEXT NOT NULL DEFAULT '',
+
+  fx_rate_label                            TEXT NOT NULL DEFAULT '',
+  fx_rate                                  TEXT NOT NULL DEFAULT '1',
+
+  gross_amount                             TEXT NOT NULL DEFAULT '',
+  gross_currency                           TEXT NOT NULL DEFAULT '',
+
+  payout_amount                            TEXT NOT NULL DEFAULT '',
+  payout_currency                          TEXT NOT NULL DEFAULT '',
+
+  withholding_tax_country_code             TEXT NOT NULL DEFAULT '',
+  withholding_tax_percent                  TEXT NOT NULL DEFAULT '',
+
+  withholding_tax_amount                   TEXT NOT NULL DEFAULT '',
+  withholding_tax_currency                 TEXT NOT NULL DEFAULT '',
+
+  withholding_tax_amount_credit            TEXT NOT NULL DEFAULT '',
+  withholding_tax_amount_credit_currency   TEXT NOT NULL DEFAULT '',
+
+  withholding_tax_amount_refundable        TEXT NOT NULL DEFAULT '',
+  withholding_tax_amount_refundable_currency TEXT NOT NULL DEFAULT '',
+
+  foreign_fees_amount                      TEXT NOT NULL DEFAULT '',
+  foreign_fees_currency                    TEXT NOT NULL DEFAULT '',
+
+  note                                     TEXT NOT NULL DEFAULT '',
+
+  calc_gross_amount_base                   TEXT NOT NULL DEFAULT '',
+  calc_after_withholding_amount_base       TEXT NOT NULL DEFAULT '',
+
+  created_at                               INTEGER NOT NULL DEFAULT 0,
+  updated_at                               INTEGER NOT NULL DEFAULT 0,
+
+  FOREIGN KEY(user_id) REFERENCES users(id),
+  FOREIGN KEY(depot_id) REFERENCES depots(id),
+  FOREIGN KEY(security_id) REFERENCES securities(id)
+);
+`,
+		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_user_id ON dividend_entries(user_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_depot_id ON dividend_entries(depot_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_security_id ON dividend_entries(security_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_pay_date ON dividend_entries(pay_date);`,
+		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_ex_date ON dividend_entries(ex_date);`,
+		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_depot_pay_date ON dividend_entries(depot_id, pay_date);`,
+		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_security_pay_date ON dividend_entries(security_id, pay_date);`,
+		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_user_pay_date ON dividend_entries(user_id, pay_date);`,
+		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_security_isin ON dividend_entries(security_isin);`,
+		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_withholding_country_code ON dividend_entries(withholding_tax_country_code);`,
 	}
 
 	for _, s := range stmts {

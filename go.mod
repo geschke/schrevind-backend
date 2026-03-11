@@ -1,4 +1,4 @@
-module github.com/geschke/fyndmark
+module github.com/geschke/schrevind
 
 go 1.25.0
 

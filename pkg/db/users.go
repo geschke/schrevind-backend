@@ -14,6 +14,7 @@ type User struct {
 	FirstName string `json:"FirstName,omitempty"`
 	LastName  string `json:"LastName,omitempty"`
 	Email     string `json:"Email,omitempty"`
+	Status    string `json:"Status,omitempty"`
 	CreatedAt int64  `json:"CreatedAt,omitempty"`
 	UpdatedAt int64  `json:"UpdatedAt,omitempty"`
 }
@@ -55,9 +56,9 @@ func (d *DB) CreateUser(ctx context.Context, u User) (int64, error) {
 
 	res, err := d.SQL.ExecContext(ctx, `
 INSERT INTO users (
-  password, firstname, lastname, email, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?);
-`, u.Password, u.FirstName, u.LastName, u.Email, u.CreatedAt, u.UpdatedAt)
+  password, firstname, lastname, email, status, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
+`, u.Password, u.FirstName, u.LastName, u.Email, "active", u.CreatedAt, u.UpdatedAt)
 	if err != nil {
 		return 0, fmt.Errorf("create user: %w", err)
 	}
@@ -78,6 +79,7 @@ func scanUser(row *sql.Row) (User, error) {
 		&u.FirstName,
 		&u.LastName,
 		&u.Email,
+		&u.Status,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	); err != nil {
@@ -96,7 +98,7 @@ func (d *DB) GetUserByID(ctx context.Context, id int64) (User, bool, error) {
 	}
 
 	row := d.SQL.QueryRowContext(ctx, `
-SELECT id, password, firstname, lastname, email, created_at, updated_at
+SELECT id, password, firstname, lastname, email, status, created_at, updated_at
   FROM users
  WHERE id = ?
  LIMIT 1;
@@ -125,7 +127,7 @@ func (d *DB) GetUserByEmail(ctx context.Context, email string) (User, bool, erro
 	}
 
 	row := d.SQL.QueryRowContext(ctx, `
-SELECT id, password, firstname, lastname, email, created_at, updated_at
+SELECT id, password, firstname, lastname, email, status, created_at, updated_at
   FROM users
  WHERE email = ?
  LIMIT 1;
@@ -156,7 +158,7 @@ func (d *DB) UpdateUser(ctx context.Context, u User) (bool, error) {
 	u.FirstName = strings.TrimSpace(u.FirstName)
 	u.LastName = strings.TrimSpace(u.LastName)
 	u.Email = strings.ToLower(strings.TrimSpace(u.Email))
-
+	u.Status = strings.ToLower(u.Status)
 	now := time.Now().Unix()
 
 	// Always update firstname/lastname (empty is allowed) and updated_at.
@@ -240,7 +242,7 @@ func (d *DB) ListUsers(ctx context.Context) ([]User, error) {
 	}
 
 	rows, err := d.SQL.QueryContext(ctx, `
-SELECT id, firstname, lastname, email, created_at, updated_at
+SELECT id, firstname, lastname, email, status, created_at, updated_at
   FROM users
  ORDER BY id ASC;
 `)
@@ -257,6 +259,7 @@ SELECT id, firstname, lastname, email, created_at, updated_at
 			&u.FirstName,
 			&u.LastName,
 			&u.Email,
+			&u.Status,
 			&u.CreatedAt,
 			&u.UpdatedAt,
 		); err != nil {

@@ -23,11 +23,14 @@ type ServerConfig struct {
 	// Listen is the address the HTTP server should bind to, e.g. ":8080" or "0.0.0.0:8080".
 	Listen string `mapstructure:"listen"`
 
+	// LogLevel is currently optional and can be used later by the application logger.
+	LogLevel string `mapstructure:"log_level"`
+
 	// TrustedProxies defines reverse proxies (IP or CIDR) whose forwarding headers are trusted.
 	TrustedProxies []string `mapstructure:"trusted_proxies"`
 }
 
-type WebAdminConfig struct {
+type WebUIConfig struct {
 	Enabled bool `mapstructure:"enabled"`
 
 	// SessionKey is used to authenticate and optionally encrypt the session cookie.
@@ -49,61 +52,6 @@ type SQLiteConfig struct {
 	Path string `mapstructure:"path"`
 }
 
-// HugoConfig controls whether Hugo should be executed by fyndmark (optional).
-type HugoConfig struct {
-	// Disables controls whether the backend should run Hugo after generating markdown files, default false, so Hugo will run. Set to true if this step should be skipped.
-	Disabled bool `mapstructure:"disabled"`
-}
-
-// CommentsSiteConfig describes one logical site/blog for comments.
-type CommentsSiteConfig struct {
-	Title              string         `mapstructure:"title"`
-	CORSAllowedOrigins []string       `mapstructure:"cors_allowed_origins"`
-	Captcha            *CaptchaConfig `mapstructure:"captcha"`
-
-	AdminRecipients []string   `mapstructure:"admin_recipients"`
-	TokenSecret     string     `mapstructure:"token_secret"`
-	Git             GitConfig  `mapstructure:"git"`
-	Hugo            HugoConfig `mapstructure:"hugo"`
-	Timezone        string     `mapstructure:"timezone"`
-}
-
-type GitConfig struct {
-	RepoURL     string `mapstructure:"repo_url"`
-	Branch      string `mapstructure:"branch"`
-	AccessToken string `mapstructure:"access_token"`
-	CloneDir    string `mapstructure:"clone_dir"`
-	Depth       int    `mapstructure:"depth"`
-
-	// Optional: initialize/update submodules during clone
-	RecurseSubmodules bool `mapstructure:"recurse_submodules"`
-
-	// Optional: additional themes/components to ensure exist under the cloned repo
-	Themes []GitThemeConfig `mapstructure:"themes"`
-}
-
-// GitThemeConfig describes an additional theme/component repository that should be
-// cloned into the website working copy (typically under themes/).
-type GitThemeConfig struct {
-	// Logical name (only for readability/logging)
-	Name string `mapstructure:"name"`
-
-	// Repo URL of the theme/component (https://... or git@...).
-	RepoURL string `mapstructure:"repo_url"`
-
-	// Optional branch (if empty, default branch is used)
-	Branch string `mapstructure:"branch"`
-
-	// Target path within the cloned website repo, e.g. "themes/hugo-felmdrav"
-	TargetPath string `mapstructure:"target_path"`
-
-	// Optional token for private theme repos (leave empty for public repos)
-	AccessToken string `mapstructure:"access_token"`
-
-	// Optional shallow clone depth for this theme repo (0 = full clone)
-	Depth int `mapstructure:"depth"`
-}
-
 // SMTPConfig holds settings related to the sending mail server
 type SMTPConfig struct {
 	Host     string `mapstructure:"host"`
@@ -119,41 +67,12 @@ type SMTPConfig struct {
 	TLSPolicy string `mapstructure:"tls_policy"`
 }
 
-// FieldConfig describes a single form field.
-type FieldConfig struct {
-	Name     string   `mapstructure:"name"`
-	Label    string   `mapstructure:"label"`
-	Type     string   `mapstructure:"type"`
-	Required bool     `mapstructure:"required"`
-	Options  []string `mapstructure:"options"`
-}
-
-type CaptchaConfig struct {
-	Enabled   bool   `mapstructure:"enabled"`
-	Provider  string `mapstructure:"provider"`
-	SecretKey string `mapstructure:"secret_key"`
-}
-
-// FormConfig describes one logical form (e.g. feedback form for a specific site).
-type FormConfig struct {
-	Title              string         `mapstructure:"title"`
-	Recipients         []string       `mapstructure:"recipients"`
-	SubjectPrefix      string         `mapstructure:"subject_prefix"`
-	CORSAllowedOrigins []string       `mapstructure:"cors_allowed_origins"`
-	Fields             []FieldConfig  `mapstructure:"fields"`
-	Captcha            *CaptchaConfig `mapstructure:"captcha"`
-}
-
 // AppConfig is the main configuration struct for the entire application.
 type AppConfig struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	WebAdmin WebAdminConfig `mapstructure:"web_admin"`
-	SMTP     SMTPConfig     `mapstructure:"smtp"`
-	//CORS   CORSConfig            `mapstructure:"cors"` // maybe later
-	Forms map[string]FormConfig `mapstructure:"forms"`
-
-	SQLite       SQLiteConfig                  `mapstructure:"sqlite"`
-	CommentSites map[string]CommentsSiteConfig `mapstructure:"comment_sites"`
+	Server ServerConfig `mapstructure:"server"`
+	WebUI  WebUIConfig  `mapstructure:"web_ui"`
+	SMTP   SMTPConfig   `mapstructure:"smtp"`
+	SQLite SQLiteConfig `mapstructure:"sqlite"`
 
 	// Logging config kept for future extensions, currently unused.
 	// LogLevel  string `mapstructure:"log_level"`
@@ -265,50 +184,19 @@ func readAndSetConfig() error {
 	}
 	log.Println("sqlite.path:", Cfg.SQLite.Path)
 
-	for siteID, siteCfg := range Cfg.CommentSites {
-		if len(siteCfg.AdminRecipients) == 0 {
-			return exitOnErr(fmt.Errorf("comment_sites.%s.admin_recipients must be set", siteID))
+	if Cfg.WebUI.Enabled {
+		if strings.TrimSpace(Cfg.WebUI.SessionKey) == "" {
+			return exitOnErr(errors.New("web_ui.session_key must be set when web_ui.enabled=true"))
 		}
-		if strings.TrimSpace(siteCfg.TokenSecret) == "" {
-			return exitOnErr(fmt.Errorf("comment_sites.%s.token_secret must be set", siteID))
+		if len(Cfg.WebUI.CORSAllowedOrigins) == 0 {
+			return exitOnErr(errors.New("web_ui.cors_allowed_origins must be set when web_ui.enabled=true"))
 		}
-		if siteCfg.Captcha != nil {
-			if strings.TrimSpace(siteCfg.Captcha.Provider) == "" {
-				return exitOnErr(fmt.Errorf("comment_sites.%s.captcha.provider must be set", siteID))
-			}
-			if strings.TrimSpace(siteCfg.Captcha.SecretKey) == "" {
-				return exitOnErr(fmt.Errorf("comment_sites.%s.captcha.secret_key must be set", siteID))
-			}
-		}
-	}
-
-	for formID, formCfg := range Cfg.Forms {
-		if len(formCfg.Recipients) == 0 {
-			return exitOnErr(fmt.Errorf("forms.%s.recipients must be set", formID))
-		}
-		if formCfg.Captcha != nil {
-			if strings.TrimSpace(formCfg.Captcha.Provider) == "" {
-				return exitOnErr(fmt.Errorf("forms.%s.captcha.provider must be set", formID))
-			}
-			if strings.TrimSpace(formCfg.Captcha.SecretKey) == "" {
-				return exitOnErr(fmt.Errorf("forms.%s.captcha.secret_key must be set", formID))
-			}
-		}
-	}
-
-	if Cfg.WebAdmin.Enabled {
-		if strings.TrimSpace(Cfg.WebAdmin.SessionKey) == "" {
-			return exitOnErr(errors.New("web_admin.session_key must be set when web_admin.enabled=true"))
-		}
-		if len(Cfg.WebAdmin.CORSAllowedOrigins) == 0 {
-			return exitOnErr(errors.New("web_admin.cors_allowed_origins must be set when web_admin.enabled=true"))
-		}
-		if Cfg.WebAdmin.CookieMaxAgeDays == 0 {
-			Cfg.WebAdmin.CookieMaxAgeDays = 30
+		if Cfg.WebUI.CookieMaxAgeDays == 0 {
+			Cfg.WebUI.CookieMaxAgeDays = 30
 		}
 		// Normalize SameSite
-		if strings.TrimSpace(Cfg.WebAdmin.CookieSameSite) == "" {
-			Cfg.WebAdmin.CookieSameSite = "lax"
+		if strings.TrimSpace(Cfg.WebUI.CookieSameSite) == "" {
+			Cfg.WebUI.CookieSameSite = "lax"
 		}
 	}
 
