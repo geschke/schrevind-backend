@@ -13,7 +13,6 @@ import (
 	"os"
 	"strings"
 
-	//	"github.com/geschke/fyndmark/pkg/dbconn"
 	//	logging "github.com/geschke/goar/pkg/logging"
 	"github.com/spf13/viper"
 )

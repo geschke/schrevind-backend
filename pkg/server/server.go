@@ -1,4 +1,4 @@
-﻿package server
+package server
 
 import (
 	"context"
@@ -10,10 +10,9 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/geschke/fyndmark/config"
-	"github.com/geschke/fyndmark/pkg/controller"
-	"github.com/geschke/fyndmark/pkg/db"
-	"github.com/geschke/fyndmark/pkg/pipeline"
+	"github.com/geschke/schrevind/config"
+	"github.com/geschke/schrevind/pkg/controller"
+	"github.com/geschke/schrevind/pkg/db"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
@@ -28,18 +27,12 @@ func Start(database *db.DB) error {
 	//}
 
 	router := gin.New()
-	feedback := controller.NewFeedbackController()
-
-	worker := pipeline.NewWorker(database, pipeline.DefaultQueueSize)
-	worker.Start()
-	comments := controller.NewCommentsController(database, worker)
-
-	if config.Cfg.WebAdmin.Enabled {
-		sessionName := config.Cfg.WebAdmin.SessionName
+	if config.Cfg.WebUI.Enabled {
+		sessionName := config.Cfg.WebUI.SessionName
 		if sessionName == "" {
-			sessionName = "fyndmark_session"
+			sessionName = "schrevind_session"
 		}
-		store := sessions.NewCookieStore([]byte(config.Cfg.WebAdmin.SessionKey))
+		store := sessions.NewCookieStore([]byte(config.Cfg.WebUI.SessionKey))
 		auth := controller.NewAuthController(database, store, sessionName)
 		router.POST("/api/auth/login", auth.PostLogin)
 		router.OPTIONS("/api/auth/login", auth.OptionsLogin)
@@ -61,31 +54,10 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/users/update-password/:id", usersCtl.Options)
 		router.POST("/api/users/delete/:id", usersCtl.PostDelete)
 		router.OPTIONS("/api/users/delete/:id", usersCtl.Options)
-
-		sitesCtl := controller.NewSitesController(database, store, sessionName)
-		router.GET("/api/sites", sitesCtl.GetList)
-		router.OPTIONS("/api/sites", sitesCtl.Options)
-
-		commentsAdminCtl := controller.NewCommentsAdminController(database, store, sessionName, worker)
-		router.GET("/api/comments/list", commentsAdminCtl.GetList)
-		router.OPTIONS("/api/comments/list", commentsAdminCtl.Options)
-		router.POST("/api/comments/approve", commentsAdminCtl.PostApprove)
-		router.OPTIONS("/api/comments/approve", commentsAdminCtl.Options)
-		router.POST("/api/comments/reject", commentsAdminCtl.PostReject)
-		router.OPTIONS("/api/comments/reject", commentsAdminCtl.Options)
-		router.POST("/api/comments/spam", commentsAdminCtl.PostSpam)
-		router.OPTIONS("/api/comments/spam", commentsAdminCtl.Options)
-		router.POST("/api/comments/delete", commentsAdminCtl.PostDelete)
-		router.OPTIONS("/api/comments/delete", commentsAdminCtl.Options)
 	}
 
 	// public routes
 	router.GET("/", getMain)
-	router.POST("/api/feedbackmail/:formid", feedback.PostMail)
-	router.GET("/api/comments/:sitekey/decision", comments.GetDecision)
-
-	router.POST("/api/comments/:sitekey/", comments.PostComment)
-	router.OPTIONS("/api/comments/:sitekey/", comments.OptionsComment)
 
 	// Basic health check
 	router.GET("/health", func(c *gin.Context) {
@@ -119,9 +91,6 @@ func Start(database *db.DB) error {
 
 	if err := srv.Shutdown(shutdownCtx); err != nil {
 		log.Printf("server shutdown failed: %v", err)
-	}
-	if err := worker.Stop(shutdownCtx); err != nil {
-		log.Printf("pipeline worker shutdown failed: %v", err)
 	}
 
 	return serveErr

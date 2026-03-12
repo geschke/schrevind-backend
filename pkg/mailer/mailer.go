@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/geschke/fyndmark/config"
+	"github.com/geschke/schrevind/config"
 	mail "github.com/wneessen/go-mail"
 )
 

@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/geschke/fyndmark/pkg/db"
+	"github.com/geschke/schrevind/pkg/db"
 )
 
 type CreateParams struct {

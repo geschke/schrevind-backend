@@ -3,7 +3,7 @@ package cmd
 import (
 	"fmt"
 
-	"github.com/geschke/schrevind/pkg/config"
+	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/db"
 )
 

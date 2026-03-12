@@ -1,7 +1,7 @@
 services:
-  fyndmark:
-    image: fyndmark:latest
-    container_name: fyndmark
+  schrevind:
+    image: schrevind:latest
+    container_name: schrevind
     restart: unless-stopped
 
     ports:
