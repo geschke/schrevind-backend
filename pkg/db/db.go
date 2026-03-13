@@ -68,8 +68,8 @@ func (d *DB) Migrate() error {
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   password      TEXT NOT NULL DEFAULT '',
-  first_name    TEXT NOT NULL DEFAULT '',
-  last_name     TEXT NOT NULL DEFAULT '',
+  firstname    TEXT NOT NULL DEFAULT '',
+  lastname     TEXT NOT NULL DEFAULT '',
   email         TEXT NOT NULL DEFAULT '',
   status        TEXT NOT NULL DEFAULT 'active',
   created_at    INTEGER NOT NULL DEFAULT 0,
@@ -203,6 +203,27 @@ CREATE TABLE IF NOT EXISTS dividend_entries (
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_user_pay_date ON dividend_entries(user_id, pay_date);`,
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_security_isin ON dividend_entries(security_isin);`,
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_withholding_country_code ON dividend_entries(withholding_tax_country_code);`,
+
+		`
+CREATE TABLE IF NOT EXISTS currencies (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  currency    TEXT NOT NULL DEFAULT '',
+  name        TEXT NOT NULL DEFAULT '',
+  status      TEXT NOT NULL DEFAULT 'active',
+  created_at  INTEGER NOT NULL DEFAULT 0,
+  updated_at  INTEGER NOT NULL DEFAULT 0
+);
+`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_currencies_currency ON currencies(currency);`,
+		`CREATE INDEX IF NOT EXISTS idx_currencies_status ON currencies(status);`,
+		`
+INSERT OR IGNORE INTO currencies (currency, name, created_at, updated_at)
+VALUES ('EUR', 'Euro', 0, 0);
+`,
+		`
+INSERT OR IGNORE INTO currencies (currency, name, created_at, updated_at)
+VALUES ('USD', 'US Dollar', 0, 0);
+`,
 	}
 
 	for _, s := range stmts {
