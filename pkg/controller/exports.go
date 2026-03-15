@@ -68,6 +68,13 @@ type exportFileInfo struct {
 	Size     int64  `json:"size"`
 }
 
+// startExportRequest is the JSON payload for POST /api/exports/start.
+type startExportRequest struct {
+	Encrypt         bool   `json:"encrypt"`
+	Password        string `json:"password"`
+	PasswordConfirm string `json:"password_confirm"`
+}
+
 // POST /api/exports/start
 func (ct ExportsController) PostStart(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
@@ -77,22 +84,47 @@ func (ct ExportsController) PostStart(c *gin.Context) {
 		return
 	}
 
-	ts := time.Now().UTC().Format("2006-01-02T15-04-05")
-	filename := fmt.Sprintf("schrevind-backup-%s.json", ts)
-	filePath := filepath.Join(config.Cfg.Export.Dir, filename)
-
-	if err := export.Run(ct.DB, filePath); err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{
-			"success": false,
-			"message": "EXPORT_ERROR",
-		})
+	var req startExportRequest
+	// ShouldBindJSON is lenient: an empty body or missing fields are fine (all fields optional).
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"message": "EXPORT_STARTED",
-	})
+	ts := time.Now().UTC().Format("2006-01-02T15-04-05")
+
+	if !req.Encrypt {
+		filename := fmt.Sprintf("schrevind-backup-%s.json", ts)
+		filePath := filepath.Join(config.Cfg.Export.Dir, filename)
+
+		if err := export.Run(ct.DB, filePath); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "EXPORT_ERROR"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{"success": true, "message": "EXPORT_STARTED"})
+		return
+	}
+
+	// Encrypted export: validate password fields.
+	if strings.TrimSpace(req.Password) == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "MISSING_PASSWORD"})
+		return
+	}
+	if req.Password != req.PasswordConfirm {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "PASSWORD_MISMATCH"})
+		return
+	}
+
+	filename := fmt.Sprintf("schrevind-backup-%s.enc.json", ts)
+	filePath := filepath.Join(config.Cfg.Export.Dir, filename)
+
+	if err := export.RunEncrypted(ct.DB, filePath, req.Password); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "EXPORT_ERROR"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "message": "EXPORT_STARTED"})
 }
 
 // GET /api/exports/list
