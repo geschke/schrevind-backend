@@ -107,6 +107,14 @@ func Start(database *db.DB) error {
 		router.POST("/api/withholding-tax-defaults/delete/:id", withholdingTaxDefaultsCtl.PostDelete)
 		router.OPTIONS("/api/withholding-tax-defaults/delete/:id", withholdingTaxDefaultsCtl.Options)
 
+		exportsCtl := controller.NewExportsController(database, store, sessionName)
+		router.POST("/api/exports/start", exportsCtl.PostStart)
+		router.OPTIONS("/api/exports/start", exportsCtl.Options)
+		router.GET("/api/exports/list", exportsCtl.GetList)
+		router.OPTIONS("/api/exports/list", exportsCtl.Options)
+		router.GET("/api/exports/get/:filename", exportsCtl.GetFile)
+		router.OPTIONS("/api/exports/get/:filename", exportsCtl.Options)
+
 		dividendEntriesCtl := controller.NewDividendEntriesController(database, store, sessionName)
 		router.GET("/api/dividend-entries/by-user/:user_id/range", dividendEntriesCtl.GetListByUserAndRange)
 		router.OPTIONS("/api/dividend-entries/by-user/:user_id/range", dividendEntriesCtl.Options)
