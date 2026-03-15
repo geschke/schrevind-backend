@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+const (
+	CurrencyStatusActive   = "active"
+	CurrencyStatusInactive = "inactive"
+	CurrencyStatusDeleted  = "deleted"
+)
+
 type Currency struct {
 	ID        int64  `json:"ID"`
 	Currency  string `json:"Currency,omitempty"`
@@ -64,6 +70,18 @@ func scanCurrency(scanner interface {
 		return nil, err
 	}
 	return &currency, nil
+}
+
+// mapCurrencySortColumn performs its package-specific operation.
+func mapCurrencySortColumn(sortBy string) (string, error) {
+	switch strings.TrimSpace(sortBy) {
+	case "", "Currency":
+		return "currency", nil
+	case "Name":
+		return "name", nil
+	default:
+		return "", fmt.Errorf("invalid sort")
+	}
 }
 
 // CreateCurrency creates a new record.
@@ -189,16 +207,40 @@ SELECT id, currency, name, status, created_at, updated_at
 }
 
 // ListCurrencies returns a list for the requested filter.
-func (d *DB) ListCurrencies() ([]Currency, error) {
+func (d *DB) ListCurrencies(limit, offset int, sortBy, status string) ([]Currency, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
+	if limit < 0 {
+		return nil, fmt.Errorf("limit must be >= 0")
+	}
+	if offset < 0 {
+		return nil, fmt.Errorf("offset must be >= 0")
+	}
 
-	rows, err := d.SQL.Query(`
+	sortColumn, err := mapCurrencySortColumn(sortBy)
+	if err != nil {
+		return nil, fmt.Errorf("list currencies: %w", err)
+	}
+
+	status = strings.TrimSpace(status)
+
+	query := `
 SELECT id, currency, name, status, created_at, updated_at
   FROM currencies
- ORDER BY id ASC;
-`)
+`
+	args := make([]any, 0, 3)
+
+	if status != "" {
+		query += " WHERE status = ?\n"
+		args = append(args, status)
+	}
+
+	query += " ORDER BY " + sortColumn + " ASC, id ASC\n"
+	query += " LIMIT ? OFFSET ?;"
+	args = append(args, limit, offset)
+
+	rows, err := d.SQL.Query(query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list currencies: %w", err)
 	}
@@ -214,38 +256,6 @@ SELECT id, currency, name, status, created_at, updated_at
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate currencies: %w", err)
-	}
-
-	return out, nil
-}
-
-// ListActiveCurrencies returns a list for the requested filter.
-func (d *DB) ListActiveCurrencies() ([]Currency, error) {
-	if d == nil || d.SQL == nil {
-		return nil, fmt.Errorf("db not initialized")
-	}
-
-	rows, err := d.SQL.Query(`
-SELECT id, currency, name, status, created_at, updated_at
-  FROM currencies
- WHERE status = ?
- ORDER BY id ASC;
-`, "active")
-	if err != nil {
-		return nil, fmt.Errorf("list active currencies: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]Currency, 0)
-	for rows.Next() {
-		currency, err := scanCurrency(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan active currency: %w", err)
-		}
-		out = append(out, *currency)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate active currencies: %w", err)
 	}
 
 	return out, nil

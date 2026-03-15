@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -81,11 +82,57 @@ func parseCurrencyID(c *gin.Context) (int64, bool) {
 // isValidCurrencyStatus performs its package-specific operation.
 func isValidCurrencyStatus(status string) bool {
 	switch status {
-	case "active", "inactive", "deleted":
+	case db.CurrencyStatusActive, db.CurrencyStatusInactive, db.CurrencyStatusDeleted:
 		return true
 	default:
 		return false
 	}
+}
+
+// isValidCurrencyStatusFilter performs its package-specific operation.
+func isValidCurrencyStatusFilter(status string) bool {
+	if status == "" {
+		return true
+	}
+	return isValidCurrencyStatus(status)
+}
+
+// parseCurrencyListParams performs its package-specific operation.
+func parseCurrencyListParams(c *gin.Context) (int, int, string, string, error) {
+	limit := 10
+	if v := strings.TrimSpace(c.Query("limit")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 100 {
+			return 0, 0, "", "", errors.New("INVALID_LIMIT")
+		}
+		limit = n
+	}
+
+	offset := 0
+	if v := strings.TrimSpace(c.Query("offset")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return 0, 0, "", "", errors.New("INVALID_OFFSET")
+		}
+		offset = n
+	}
+
+	sortBy := "Currency"
+	if v := strings.TrimSpace(c.Query("sort")); v != "" {
+		switch v {
+		case "Currency", "Name":
+			sortBy = v
+		default:
+			return 0, 0, "", "", errors.New("INVALID_SORT")
+		}
+	}
+
+	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
+	if !isValidCurrencyStatusFilter(status) {
+		return 0, 0, "", "", errors.New("INVALID_STATUS_FILTER")
+	}
+
+	return limit, offset, sortBy, status, nil
 }
 
 // isValidCurrencyCode performs its package-specific operation.
@@ -129,7 +176,13 @@ func (ct CurrenciesController) GetList(c *gin.Context) {
 		return
 	}
 
-	items, err := ct.DB.ListCurrencies()
+	limit, offset, sortBy, status, err := parseCurrencyListParams(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	items, err := ct.DB.ListCurrencies(limit, offset, sortBy, status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

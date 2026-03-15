@@ -7,6 +7,12 @@ import (
 	"time"
 )
 
+const (
+	SecurityStatusActive   = "active"
+	SecurityStatusInactive = "inactive"
+	SecurityStatusDeleted  = "deleted"
+)
+
 type Security struct {
 	ID        int64  `json:"ID"`
 	Name      string `json:"Name,omitempty"`
@@ -18,7 +24,7 @@ type Security struct {
 	UpdatedAt int64  `json:"UpdatedAt,omitempty"`
 }
 
-// normalizeSecurity performs its package-specific operation.
+// normalizeSecurity trims user-facing fields, normalizes the ISIN, and updates timestamps.
 func normalizeSecurity(security Security) (Security, error) {
 	security.Name = strings.TrimSpace(security.Name)
 	security.ISIN = strings.ToUpper(strings.TrimSpace(security.ISIN))
@@ -39,7 +45,7 @@ func normalizeSecurity(security Security) (Security, error) {
 	return security, nil
 }
 
-// scanSecurity performs its package-specific operation.
+// scanSecurity reads one security row from the current scanner position.
 func scanSecurity(scanner interface {
 	Scan(dest ...any) error
 }) (*Security, error) {
@@ -57,6 +63,22 @@ func scanSecurity(scanner interface {
 		return nil, err
 	}
 	return &security, nil
+}
+
+// mapSecuritySortColumn maps allowed API sort values to SQL column names.
+func mapSecuritySortColumn(sortBy string) (string, error) {
+	switch strings.TrimSpace(sortBy) {
+	case "", "Name":
+		return "name", nil
+	case "ISIN":
+		return "isin", nil
+	case "WKN":
+		return "wkn", nil
+	case "Symbol":
+		return "symbol", nil
+	default:
+		return "", fmt.Errorf("invalid sort")
+	}
 }
 
 // CreateSecurity creates a new record.
@@ -127,7 +149,7 @@ UPDATE securities
 	return nil
 }
 
-// GetSecurityByID returns data for the requested input.
+// GetSecurityByID returns the security with the requested ID, or nil when not found.
 func (d *DB) GetSecurityByID(id int64) (*Security, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -154,7 +176,7 @@ SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
 	return security, nil
 }
 
-// GetSecurityByISIN returns data for the requested input.
+// GetSecurityByISIN returns the security for the requested ISIN, or nil when not found.
 func (d *DB) GetSecurityByISIN(isin string) (*Security, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -183,19 +205,43 @@ SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
 	return security, nil
 }
 
-// ListSecurities returns a list for the requested filter.
-func (d *DB) ListSecurities() ([]Security, error) {
+// ListSecurities returns a filtered and paginated list of securities.
+func (d *DB) ListSecurities(limit, offset int, sortBy, status string) ([]Security, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
+	if limit < 0 {
+		return nil, fmt.Errorf("limit must be >= 0")
+	}
+	if offset < 0 {
+		return nil, fmt.Errorf("offset must be >= 0")
+	}
 
-	rows, err := d.SQL.Query(`
+	sortColumn, err := mapSecuritySortColumn(sortBy)
+	if err != nil {
+		return nil, fmt.Errorf("list securities page: %w", err)
+	}
+
+	status = strings.TrimSpace(status)
+
+	query := `
 SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
   FROM securities
- ORDER BY id ASC;
-`)
+`
+	args := make([]any, 0, 3)
+
+	if status != "" {
+		query += " WHERE status = ?\n"
+		args = append(args, status)
+	}
+
+	query += " ORDER BY " + sortColumn + " ASC, id ASC\n"
+	query += " LIMIT ? OFFSET ?;"
+	args = append(args, limit, offset)
+
+	rows, err := d.SQL.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list securities: %w", err)
+		return nil, fmt.Errorf("list securities page: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -203,50 +249,18 @@ SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
 	for rows.Next() {
 		security, err := scanSecurity(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan security: %w", err)
+			return nil, fmt.Errorf("scan security page: %w", err)
 		}
 		out = append(out, *security)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate securities: %w", err)
+		return nil, fmt.Errorf("iterate securities page: %w", err)
 	}
 
 	return out, nil
 }
 
-// ListActiveSecurities returns a list for the requested filter.
-func (d *DB) ListActiveSecurities() ([]Security, error) {
-	if d == nil || d.SQL == nil {
-		return nil, fmt.Errorf("db not initialized")
-	}
-
-	rows, err := d.SQL.Query(`
-SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
-  FROM securities
- WHERE status = ?
- ORDER BY id ASC;
-`, "active")
-	if err != nil {
-		return nil, fmt.Errorf("list active securities: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]Security, 0)
-	for rows.Next() {
-		security, err := scanSecurity(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan active security: %w", err)
-		}
-		out = append(out, *security)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate active securities: %w", err)
-	}
-
-	return out, nil
-}
-
-// SetSecurityStatus performs its package-specific operation.
+// SetSecurityStatus updates only the status and updated_at fields of the security.
 func (d *DB) SetSecurityStatus(id int64, status string) error {
 	if d == nil || d.SQL == nil {
 		return fmt.Errorf("db not initialized")

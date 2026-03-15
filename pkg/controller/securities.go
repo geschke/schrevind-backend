@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -85,11 +86,57 @@ func parseSecurityID(c *gin.Context) (int64, bool) {
 // isValidSecurityStatus performs its package-specific operation.
 func isValidSecurityStatus(status string) bool {
 	switch status {
-	case "active", "inactive", "deleted":
+	case db.SecurityStatusActive, db.SecurityStatusInactive, db.SecurityStatusDeleted:
 		return true
 	default:
 		return false
 	}
+}
+
+// isValidSecurityStatusFilter performs its package-specific operation.
+func isValidSecurityStatusFilter(status string) bool {
+	if status == "" {
+		return true
+	}
+	return isValidSecurityStatus(status)
+}
+
+// parseSecurityListParams performs its package-specific operation.
+func parseSecurityListParams(c *gin.Context) (int, int, string, string, error) {
+	limit := 10
+	if v := strings.TrimSpace(c.Query("limit")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 100 {
+			return 0, 0, "", "", errors.New("INVALID_LIMIT")
+		}
+		limit = n
+	}
+
+	offset := 0
+	if v := strings.TrimSpace(c.Query("offset")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			return 0, 0, "", "", errors.New("INVALID_OFFSET")
+		}
+		offset = n
+	}
+
+	sortBy := "Name"
+	if v := strings.TrimSpace(c.Query("sort")); v != "" {
+		switch v {
+		case "Name", "ISIN", "WKN", "Symbol":
+			sortBy = v
+		default:
+			return 0, 0, "", "", errors.New("INVALID_SORT")
+		}
+	}
+
+	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
+	if !isValidSecurityStatusFilter(status) {
+		return 0, 0, "", "", errors.New("INVALID_STATUS_FILTER")
+	}
+
+	return limit, offset, sortBy, status, nil
 }
 
 // normalizeSecurityPayload performs its package-specific operation.
@@ -122,7 +169,13 @@ func (ct SecuritiesController) GetList(c *gin.Context) {
 		return
 	}
 
-	items, err := ct.DB.ListSecurities()
+	limit, offset, sortBy, status, err := parseSecurityListParams(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
+		return
+	}
+
+	items, err := ct.DB.ListSecurities(limit, offset, sortBy, status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
