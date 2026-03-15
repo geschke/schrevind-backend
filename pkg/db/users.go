@@ -274,6 +274,47 @@ SELECT id, firstname, lastname, email, status, created_at, updated_at
 	return out, nil
 }
 
+// ListAllUsersForExport returns all user rows including the password hash.
+// Intended for full-database exports only.
+func (d *DB) ListAllUsersForExport(ctx context.Context) ([]User, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+
+	rows, err := d.SQL.QueryContext(ctx, `
+SELECT id, password, firstname, lastname, email, status, created_at, updated_at
+  FROM users
+ ORDER BY id ASC;
+`)
+	if err != nil {
+		return nil, fmt.Errorf("list all users for export: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]User, 0)
+	for rows.Next() {
+		var u User
+		if err := rows.Scan(
+			&u.ID,
+			&u.Password,
+			&u.FirstName,
+			&u.LastName,
+			&u.Email,
+			&u.Status,
+			&u.CreatedAt,
+			&u.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan user for export: %w", err)
+		}
+		out = append(out, u)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate users for export: %w", err)
+	}
+
+	return out, nil
+}
+
 // GetUserIDByEmail returns data for the requested input.
 func (d *DB) GetUserIDByEmail(ctx context.Context, email string) (int64, bool, error) {
 	if d == nil || d.SQL == nil {

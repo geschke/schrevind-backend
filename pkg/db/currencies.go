@@ -261,6 +261,37 @@ SELECT id, currency, name, status, created_at, updated_at
 	return out, nil
 }
 
+// ListAllCurrencies returns all currency rows without any filter. Intended for full-database exports.
+func (d *DB) ListAllCurrencies() ([]Currency, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+
+	rows, err := d.SQL.Query(`
+SELECT id, currency, name, status, created_at, updated_at
+  FROM currencies
+ ORDER BY id ASC;
+`)
+	if err != nil {
+		return nil, fmt.Errorf("list all currencies for export: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]Currency, 0)
+	for rows.Next() {
+		currency, err := scanCurrency(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan currency for export: %w", err)
+		}
+		out = append(out, *currency)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate currencies for export: %w", err)
+	}
+
+	return out, nil
+}
+
 // SetCurrencyStatus performs its package-specific operation.
 func (d *DB) SetCurrencyStatus(id int64, status string) error {
 	if d == nil || d.SQL == nil {

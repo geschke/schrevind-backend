@@ -232,6 +232,37 @@ SELECT id, user_id, name, broker_name, account_number, base_currency, descriptio
 	return out, nil
 }
 
+// ListAllDepots returns all depot rows without any filter. Intended for full-database exports.
+func (d *DB) ListAllDepots() ([]Depot, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+
+	rows, err := d.SQL.Query(`
+SELECT id, user_id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at
+  FROM depots
+ ORDER BY id ASC;
+`)
+	if err != nil {
+		return nil, fmt.Errorf("list all depots for export: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]Depot, 0)
+	for rows.Next() {
+		depot, err := scanDepot(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan depot for export: %w", err)
+		}
+		out = append(out, *depot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate depots for export: %w", err)
+	}
+
+	return out, nil
+}
+
 // SetDepotStatus performs its package-specific operation.
 func (d *DB) SetDepotStatus(id int64, status string) error {
 	if d == nil || d.SQL == nil {

@@ -388,6 +388,42 @@ func (d *DB) DeleteDividendEntry(id int64) error {
 	return nil
 }
 
+// ListAllDividendEntries returns all dividend entry rows without any filter. Intended for full-database exports.
+func (d *DB) ListAllDividendEntries() ([]DividendEntry, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+
+	rows, err := d.SQL.Query(`
+SELECT id, user_id, depot_id, security_id, pay_date, ex_date, security_name, security_isin, security_wkn, security_symbol,
+       quantity, dividend_per_unit_amount, dividend_per_unit_currency, fx_rate_label, fx_rate, gross_amount, gross_currency,
+       payout_amount, payout_currency, withholding_tax_country_code, withholding_tax_percent, withholding_tax_amount,
+       withholding_tax_currency, withholding_tax_amount_credit, withholding_tax_amount_credit_currency,
+       withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, foreign_fees_amount, foreign_fees_currency,
+       note, calc_gross_amount_base, calc_after_withholding_amount_base, created_at, updated_at
+  FROM dividend_entries
+ ORDER BY pay_date ASC, id ASC;
+`)
+	if err != nil {
+		return nil, fmt.Errorf("list all dividend entries for export: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]DividendEntry, 0)
+	for rows.Next() {
+		entry, err := scanDividendEntry(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan dividend entry for export: %w", err)
+		}
+		out = append(out, *entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dividend entries for export: %w", err)
+	}
+
+	return out, nil
+}
+
 // ListDividendEntriesByUserID returns a list for the requested filter.
 func (d *DB) ListDividendEntriesByUserID(userID int64) ([]DividendEntry, error) {
 	return d.listDividendEntriesByColumn("user_id", userID)
