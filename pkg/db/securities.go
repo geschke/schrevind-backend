@@ -291,6 +291,29 @@ SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
 	return out, nil
 }
 
+// CountSecurities returns the total number of securities matching the given status filter.
+// An empty status string counts all securities regardless of status.
+func (d *DB) CountSecurities(status string) (int64, error) {
+	if d == nil || d.SQL == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+
+	status = strings.TrimSpace(status)
+	query := `SELECT COUNT(*) FROM securities`
+	args := make([]any, 0, 1)
+	if status != "" {
+		query += " WHERE status = ?"
+		args = append(args, status)
+	}
+	query += ";"
+
+	var count int64
+	if err := d.SQL.QueryRow(query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count securities: %w", err)
+	}
+	return count, nil
+}
+
 // SetSecurityStatus updates only the status and updated_at fields of the security.
 func (d *DB) SetSecurityStatus(id int64, status string) error {
 	if d == nil || d.SQL == nil {

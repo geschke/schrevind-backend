@@ -292,6 +292,29 @@ SELECT id, currency, name, status, created_at, updated_at
 	return out, nil
 }
 
+// CountCurrencies returns the total number of currencies matching the given status filter.
+// An empty status string counts all currencies regardless of status.
+func (d *DB) CountCurrencies(status string) (int64, error) {
+	if d == nil || d.SQL == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+
+	status = strings.TrimSpace(status)
+	query := `SELECT COUNT(*) FROM currencies`
+	args := make([]any, 0, 1)
+	if status != "" {
+		query += " WHERE status = ?"
+		args = append(args, status)
+	}
+	query += ";"
+
+	var count int64
+	if err := d.SQL.QueryRow(query, args...).Scan(&count); err != nil {
+		return 0, fmt.Errorf("count currencies: %w", err)
+	}
+	return count, nil
+}
+
 // SetCurrencyStatus performs its package-specific operation.
 func (d *DB) SetCurrencyStatus(id int64, status string) error {
 	if d == nil || d.SQL == nil {

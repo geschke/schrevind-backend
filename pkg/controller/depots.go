@@ -176,6 +176,7 @@ func (ct DepotsController) GetList(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+		"count":   int64(len(items)),
 		"items":   items,
 	})
 }

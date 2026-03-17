@@ -181,8 +181,15 @@ func (ct SecuritiesController) GetList(c *gin.Context) {
 		return
 	}
 
+	count, err := ct.DB.CountSecurities(status)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+		"count":   count,
 		"items":   items,
 	})
 }

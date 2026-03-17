@@ -334,6 +334,7 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+		"count":   int64(len(items)),
 		"items":   items,
 	})
 }
@@ -360,6 +361,7 @@ func (ct DividendEntriesController) GetListByDepot(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+		"count":   int64(len(items)),
 		"items":   items,
 	})
 }
@@ -386,6 +388,7 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+		"count":   int64(len(items)),
 		"items":   items,
 	})
 }
@@ -416,6 +419,7 @@ func (ct DividendEntriesController) GetListByUserAndRange(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+		"count":   int64(len(items)),
 		"items":   items,
 	})
 }
@@ -446,6 +450,7 @@ func (ct DividendEntriesController) GetListByDepotAndRange(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+		"count":   int64(len(items)),
 		"items":   items,
 	})
 }
@@ -476,6 +481,7 @@ func (ct DividendEntriesController) GetListBySecurityAndRange(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+		"count":   int64(len(items)),
 		"items":   items,
 	})
 }
