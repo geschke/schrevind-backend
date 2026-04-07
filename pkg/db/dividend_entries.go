@@ -205,9 +205,20 @@ func mapDividendEntrySortColumn(sortBy string) (string, error) {
 	case "ExDate":
 		return "de.ex_date", nil
 	case "SecurityName":
-		return "de.security_name", nil
+		return "de.security_name COLLATE NOCASE", nil
 	default:
 		return "", fmt.Errorf("invalid sort")
+	}
+}
+
+func normalizeDividendEntrySortDirection(direction string) (string, error) {
+	switch strings.ToUpper(strings.TrimSpace(direction)) {
+	case "", "ASC":
+		return "ASC", nil
+	case "DESC":
+		return "DESC", nil
+	default:
+		return "", fmt.Errorf("invalid direction")
 	}
 }
 
@@ -227,7 +238,7 @@ func appendDividendEntryDateFilters(query string, args []any, fromDate, toDate s
 	return query, args
 }
 
-func (d *DB) listDividendEntriesByColumnPage(column string, value int64, limit, offset int, sortBy, fromDate, toDate string) ([]DividendEntry, error) {
+func (d *DB) listDividendEntriesByColumnPage(column string, value int64, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
@@ -245,6 +256,10 @@ func (d *DB) listDividendEntriesByColumnPage(column string, value int64, limit, 
 	if err != nil {
 		return nil, fmt.Errorf("list dividend entries page by %s: %w", column, err)
 	}
+	sortDirection, err := normalizeDividendEntrySortDirection(direction)
+	if err != nil {
+		return nil, fmt.Errorf("list dividend entries page by %s: %w", column, err)
+	}
 
 	query := `
 SELECT` + dividendEntrySelectColumns + `
@@ -253,7 +268,7 @@ SELECT` + dividendEntrySelectColumns + `
 `
 	args := []any{value}
 	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
-	query += " ORDER BY " + sortColumn + " ASC, de.id ASC\n"
+	query += " ORDER BY " + sortColumn + " " + sortDirection + ", de.id " + sortDirection + "\n"
 	query += " LIMIT ? OFFSET ?;"
 	args = append(args, limit, offset)
 
@@ -492,7 +507,7 @@ func appendDividendEntryRolesFilter(query string, args []any, roles []string) (s
 
 // ListAccessibleDividendEntriesByUser returns a filtered and paginated list of dividend
 // entries accessible to the user for the requested action scope.
-func (d *DB) ListAccessibleDividendEntriesByUser(userID int64, all bool, roles []string, limit, offset int, sortBy, fromDate, toDate string) ([]DividendEntry, error) {
+func (d *DB) ListAccessibleDividendEntriesByUser(userID int64, all bool, roles []string, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
@@ -507,6 +522,10 @@ func (d *DB) ListAccessibleDividendEntriesByUser(userID int64, all bool, roles [
 	}
 
 	sortColumn, err := mapDividendEntrySortColumn(sortBy)
+	if err != nil {
+		return nil, fmt.Errorf("list accessible dividend entries by user: %w", err)
+	}
+	sortDirection, err := normalizeDividendEntrySortDirection(direction)
 	if err != nil {
 		return nil, fmt.Errorf("list accessible dividend entries by user: %w", err)
 	}
@@ -531,7 +550,7 @@ SELECT` + dividendEntrySelectColumns + `
 	}
 
 	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
-	query += " ORDER BY " + sortColumn + " ASC, de.id ASC\n"
+	query += " ORDER BY " + sortColumn + " " + sortDirection + ", de.id " + sortDirection + "\n"
 	query += " LIMIT ? OFFSET ?;"
 	args = append(args, limit, offset)
 
@@ -597,8 +616,8 @@ SELECT COUNT(*)
 }
 
 // ListDividendEntriesByDepotID returns a filtered and paginated list for the requested filter.
-func (d *DB) ListDividendEntriesByDepotID(depotID int64, limit, offset int, sortBy, fromDate, toDate string) ([]DividendEntry, error) {
-	return d.listDividendEntriesByColumnPage("depot_id", depotID, limit, offset, sortBy, fromDate, toDate)
+func (d *DB) ListDividendEntriesByDepotID(depotID int64, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
+	return d.listDividendEntriesByColumnPage("depot_id", depotID, limit, offset, sortBy, direction, fromDate, toDate)
 }
 
 // CountDividendEntriesByDepotID returns the total number of filtered records for the requested filter.
@@ -607,8 +626,8 @@ func (d *DB) CountDividendEntriesByDepotID(depotID int64, fromDate, toDate strin
 }
 
 // ListDividendEntriesBySecurityID returns a filtered and paginated list for the requested filter.
-func (d *DB) ListDividendEntriesBySecurityID(securityID int64, limit, offset int, sortBy, fromDate, toDate string) ([]DividendEntry, error) {
-	return d.listDividendEntriesByColumnPage("security_id", securityID, limit, offset, sortBy, fromDate, toDate)
+func (d *DB) ListDividendEntriesBySecurityID(securityID int64, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
+	return d.listDividendEntriesByColumnPage("security_id", securityID, limit, offset, sortBy, direction, fromDate, toDate)
 }
 
 // CountDividendEntriesBySecurityID returns the total number of filtered records for the requested filter.

@@ -193,13 +193,13 @@ func parseSecurityIDParam(c *gin.Context) (int64, bool) {
 }
 
 // parseDividendEntryListParams performs its package-specific operation.
-func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, string, bool) {
+func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, string, string, bool) {
 	limit := 20
 	if v := strings.TrimSpace(c.Query("limit")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > 100 {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_LIMIT"})
-			return 0, 0, "", "", "", false
+			return 0, 0, "", "", "", "", false
 		}
 		limit = n
 	}
@@ -209,7 +209,7 @@ func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, str
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_OFFSET"})
-			return 0, 0, "", "", "", false
+			return 0, 0, "", "", "", "", false
 		}
 		offset = n
 	}
@@ -221,7 +221,22 @@ func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, str
 			sortBy = v
 		default:
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_SORT"})
-			return 0, 0, "", "", "", false
+			return 0, 0, "", "", "", "", false
+		}
+	}
+
+	direction := "ASC"
+	if v := strings.ToLower(strings.TrimSpace(c.Query("direction"))); v != "" {
+		switch v {
+		case "asc":
+			direction = "ASC"
+		case "desc":
+			direction = "DESC"
+		case "none":
+			direction = "ASC"
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_DIRECTION"})
+			return 0, 0, "", "", "", "", false
 		}
 	}
 
@@ -229,10 +244,10 @@ func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, str
 	toDate := strings.TrimSpace(c.Query("to"))
 	if fromDate != "" && toDate != "" && fromDate > toDate {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_DATE_RANGE"})
-		return 0, 0, "", "", "", false
+		return 0, 0, "", "", "", "", false
 	}
 
-	return limit, offset, sortBy, fromDate, toDate, true
+	return limit, offset, sortBy, direction, fromDate, toDate, true
 }
 
 // normalizeDividendEntryPayload performs its package-specific operation.
@@ -400,12 +415,12 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 		return
 	}
 
-	limit, offset, sortBy, fromDate, toDate, ok := parseDividendEntryListParams(c)
+	limit, offset, sortBy, direction, fromDate, toDate, ok := parseDividendEntryListParams(c)
 	if !ok {
 		return
 	}
 
-	items, err := ct.DB.ListAccessibleDividendEntriesByUser(requestedUserID, scope.All, scope.Roles, limit, offset, sortBy, fromDate, toDate)
+	items, err := ct.DB.ListAccessibleDividendEntriesByUser(requestedUserID, scope.All, scope.Roles, limit, offset, sortBy, direction, fromDate, toDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -454,12 +469,12 @@ func (ct DividendEntriesController) GetListByDepot(c *gin.Context) {
 		return
 	}
 
-	limit, offset, sortBy, fromDate, toDate, ok := parseDividendEntryListParams(c)
+	limit, offset, sortBy, direction, fromDate, toDate, ok := parseDividendEntryListParams(c)
 	if !ok {
 		return
 	}
 
-	items, err := ct.DB.ListDividendEntriesByDepotID(depotID, limit, offset, sortBy, fromDate, toDate)
+	items, err := ct.DB.ListDividendEntriesByDepotID(depotID, limit, offset, sortBy, direction, fromDate, toDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -492,12 +507,12 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		return
 	}
 
-	limit, offset, sortBy, fromDate, toDate, ok := parseDividendEntryListParams(c)
+	limit, offset, sortBy, direction, fromDate, toDate, ok := parseDividendEntryListParams(c)
 	if !ok {
 		return
 	}
 
-	items, err := ct.DB.ListDividendEntriesBySecurityID(securityID, limit, offset, sortBy, fromDate, toDate)
+	items, err := ct.DB.ListDividendEntriesBySecurityID(securityID, limit, offset, sortBy, direction, fromDate, toDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
