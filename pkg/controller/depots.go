@@ -1,15 +1,14 @@
 package controller
 
 import (
-	"context"
 	"net/http"
 	"strconv"
 	"strings"
-	"time"
 
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/cors"
 	"github.com/geschke/schrevind/pkg/db"
+	"github.com/geschke/schrevind/pkg/grrt"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
 )
@@ -18,14 +17,16 @@ type DepotsController struct {
 	DB          *db.DB
 	Store       sessions.Store
 	SessionName string
+	G           *grrt.Grrt
 }
 
 // NewDepotsController constructs and returns a new instance.
-func NewDepotsController(database *db.DB, store sessions.Store, sessionName string) *DepotsController {
+func NewDepotsController(database *db.DB, store sessions.Store, sessionName string, g *grrt.Grrt) *DepotsController {
 	return &DepotsController{
 		DB:          database,
 		Store:       store,
 		SessionName: sessionName,
+		G:           g,
 	}
 }
 
@@ -35,7 +36,9 @@ func (ct DepotsController) Options(c *gin.Context) {
 }
 
 type addDepotRequest struct {
-	UserID        int64  `json:"UserID"`
+	// GroupID is used only for the permission check (depot:create requires group admin).
+	// It is not stored on the depot itself.
+	GroupID       int64  `json:"GroupID"`
 	Name          string `json:"Name"`
 	BrokerName    string `json:"BrokerName"`
 	AccountNumber string `json:"AccountNumber"`
@@ -45,13 +48,26 @@ type addDepotRequest struct {
 }
 
 type updateDepotRequest struct {
-	UserID        *int64  `json:"UserID"`
 	Name          *string `json:"Name"`
 	BrokerName    *string `json:"BrokerName"`
 	AccountNumber *string `json:"AccountNumber"`
 	BaseCurrency  *string `json:"BaseCurrency"`
 	Description   *string `json:"Description"`
 	Status        *string `json:"Status"`
+}
+
+type depotAccessAddRequest struct {
+	UserID int64  `json:"UserID"`
+	Role   string `json:"Role"`
+}
+
+type depotAccessRemoveRequest struct {
+	UserID int64 `json:"UserID"`
+}
+
+type depotAccessChangeRequest struct {
+	UserID int64  `json:"UserID"`
+	Role   string `json:"Role"`
 }
 
 // ensureAuthorized performs its package-specific operation.
@@ -137,9 +153,6 @@ func normalizeDepotPayload(item db.Depot) (db.Depot, string) {
 	item.Description = strings.TrimSpace(item.Description)
 	item.Status = strings.ToLower(strings.TrimSpace(item.Status))
 
-	if item.UserID <= 0 {
-		return item, "INVALID_USER_ID"
-	}
 	if item.Name == "" {
 		return item, "MISSING_NAME"
 	}
@@ -168,7 +181,7 @@ func (ct DepotsController) GetList(c *gin.Context) {
 		return
 	}
 
-	items, err := ct.DB.ListDepotsByUserID(userID)
+	items, err := ct.DB.ListDepotsByUserMembership(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -201,16 +214,22 @@ func (ct DepotsController) GetByID(c *gin.Context) {
 		return
 	}
 
-	item, err := ct.DB.GetDepotByID(depotID)
+	item, found, err := ct.DB.GetDepotByID(depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if item == nil {
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "DEPOT_NOT_FOUND"})
 		return
 	}
-	if item.UserID != sessionUserID {
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:list", depotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
 		return
 	}
@@ -241,27 +260,23 @@ func (ct DepotsController) PostAdd(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
 	}
-
-	if req.UserID != sessionUserID {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_USER"})
+	// todo error handling... user is in > 1 groups. primary group? choose groups?
+	if req.GroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	exists, err := ct.DB.UserExistsByID(ctx, req.UserID)
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "depot:create", req.GroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if !exists {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "USER_NOT_FOUND"})
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_GROUP"})
 		return
 	}
 
 	item, message := normalizeDepotPayload(db.Depot{
-		UserID:        req.UserID,
 		Name:          req.Name,
 		BrokerName:    req.BrokerName,
 		AccountNumber: req.AccountNumber,
@@ -278,6 +293,24 @@ func (ct DepotsController) PostAdd(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
+
+	// Auto-grant the creating user as depot owner.
+	if err := ct.DB.GrantMembership(&db.Membership{
+		EntityType: db.EntityTypeDepot,
+		EntityID:   item.ID,
+		UserID:     sessionUserID,
+		Role:       db.RoleDepotOwner,
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	_ = ct.DB.WriteAuditLog(&db.AuditLog{
+		UserID:     sessionUserID,
+		Action:     db.ActionCreate,
+		EntityType: db.EntityTypeDepot,
+		EntityID:   item.ID,
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -305,16 +338,22 @@ func (ct DepotsController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	existing, err := ct.DB.GetDepotByID(depotID)
+	existing, found, err := ct.DB.GetDepotByID(depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if existing == nil {
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "DEPOT_NOT_FOUND"})
 		return
 	}
-	if existing.UserID != sessionUserID {
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:rename", depotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
 		return
 	}
@@ -325,10 +364,7 @@ func (ct DepotsController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	updated := *existing
-	if req.UserID != nil {
-		updated.UserID = *req.UserID
-	}
+	updated := existing
 	if req.Name != nil {
 		updated.Name = *req.Name
 	}
@@ -348,24 +384,6 @@ func (ct DepotsController) PostUpdate(c *gin.Context) {
 		updated.Status = *req.Status
 	}
 
-	if updated.UserID != sessionUserID {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_USER"})
-		return
-	}
-
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	exists, err := ct.DB.UserExistsByID(ctx, updated.UserID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !exists {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "USER_NOT_FOUND"})
-		return
-	}
-
 	updated, message := normalizeDepotPayload(updated)
 	if message != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": message})
@@ -376,6 +394,13 @@ func (ct DepotsController) PostUpdate(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
+
+	_ = ct.DB.WriteAuditLog(&db.AuditLog{
+		UserID:     sessionUserID,
+		Action:     db.ActionUpdate,
+		EntityType: db.EntityTypeDepot,
+		EntityID:   depotID,
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -403,16 +428,22 @@ func (ct DepotsController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	item, err := ct.DB.GetDepotByID(depotID)
+	_, found, err := ct.DB.GetDepotByID(depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if item == nil {
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "DEPOT_NOT_FOUND"})
 		return
 	}
-	if item.UserID != sessionUserID {
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:delete", depotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
 		return
 	}
@@ -422,8 +453,302 @@ func (ct DepotsController) PostDelete(c *gin.Context) {
 		return
 	}
 
+	_ = ct.DB.WriteAuditLog(&db.AuditLog{
+		UserID:     sessionUserID,
+		Action:     db.ActionDelete,
+		EntityType: db.EntityTypeDepot,
+		EntityID:   depotID,
+	})
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "DEPOT_DELETED",
+	})
+}
+
+// GET /api/depots/:id/access
+func (ct DepotsController) GetAccess(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	depotID, ok := parseDepotID(c)
+	if !ok {
+		return
+	}
+
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:access:list", depotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+		return
+	}
+
+	items, err := ct.DB.ListMembershipsByEntity(db.EntityTypeDepot, depotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"count":   int64(len(items)),
+		"items":   items,
+	})
+}
+
+// POST /api/depots/:id/access/add
+func (ct DepotsController) PostAccessAdd(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	depotID, ok := parseDepotID(c)
+	if !ok {
+		return
+	}
+
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:access:add", depotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+		return
+	}
+
+	var req depotAccessAddRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.UserID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
+		return
+	}
+	if !db.IsValidDepotRole(req.Role) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_ROLE"})
+		return
+	}
+
+	if err := ct.DB.GrantMembership(&db.Membership{
+		EntityType: db.EntityTypeDepot,
+		EntityID:   depotID,
+		UserID:     req.UserID,
+		Role:       req.Role,
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	_ = ct.DB.WriteAuditLog(&db.AuditLog{
+		UserID:     sessionUserID,
+		Action:     db.ActionGrant,
+		EntityType: db.EntityTypeDepot,
+		EntityID:   depotID,
+		Detail:     strings.Join([]string{strconv.FormatInt(req.UserID, 10), req.Role}, ":"),
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "ACCESS_GRANTED",
+	})
+}
+
+// POST /api/depots/:id/access/remove
+func (ct DepotsController) PostAccessRemove(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	depotID, ok := parseDepotID(c)
+	if !ok {
+		return
+	}
+
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:access:remove", depotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+		return
+	}
+
+	var req depotAccessRemoveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.UserID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
+		return
+	}
+
+	// Guard: at least one owner must remain.
+	existing, found, err := ct.DB.GetMembership(db.EntityTypeDepot, depotID, req.UserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "ACCESS_NOT_FOUND"})
+		return
+	}
+	if existing.Role == db.RoleDepotOwner {
+		count, err := ct.DB.CountDepotOwnerMemberships(depotID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if count <= 1 {
+			c.JSON(http.StatusConflict, gin.H{"success": false, "message": "LAST_OWNER"})
+			return
+		}
+	}
+
+	removed, err := ct.DB.RevokeMembership(db.EntityTypeDepot, depotID, req.UserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !removed {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "ACCESS_NOT_FOUND"})
+		return
+	}
+
+	_ = ct.DB.WriteAuditLog(&db.AuditLog{
+		UserID:     sessionUserID,
+		Action:     db.ActionRevoke,
+		EntityType: db.EntityTypeDepot,
+		EntityID:   depotID,
+		Detail:     strconv.FormatInt(req.UserID, 10),
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "ACCESS_REVOKED",
+	})
+}
+
+// POST /api/depots/:id/access/change
+func (ct DepotsController) PostAccessChange(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	depotID, ok := parseDepotID(c)
+	if !ok {
+		return
+	}
+
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:access:change", depotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+		return
+	}
+
+	var req depotAccessChangeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.UserID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
+		return
+	}
+	if !db.IsValidDepotRole(req.Role) {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_ROLE"})
+		return
+	}
+
+	// Guard: degrading the last owner is not allowed.
+	existing, found, err := ct.DB.GetMembership(db.EntityTypeDepot, depotID, req.UserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "ACCESS_NOT_FOUND"})
+		return
+	}
+	if existing.Role == db.RoleDepotOwner && req.Role != db.RoleDepotOwner {
+		count, err := ct.DB.CountDepotOwnerMemberships(depotID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if count <= 1 {
+			c.JSON(http.StatusConflict, gin.H{"success": false, "message": "LAST_OWNER"})
+			return
+		}
+	}
+
+	if err := ct.DB.GrantMembership(&db.Membership{
+		EntityType: db.EntityTypeDepot,
+		EntityID:   depotID,
+		UserID:     req.UserID,
+		Role:       req.Role,
+	}); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	_ = ct.DB.WriteAuditLog(&db.AuditLog{
+		UserID:     sessionUserID,
+		Action:     db.ActionUpdate,
+		EntityType: db.EntityTypeDepot,
+		EntityID:   depotID,
+		Detail:     strings.Join([]string{strconv.FormatInt(req.UserID, 10), req.Role}, ":"),
+	})
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "ACCESS_CHANGED",
 	})
 }

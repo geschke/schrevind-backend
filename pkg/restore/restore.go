@@ -78,12 +78,17 @@ func Run(database *db.DB, doc *export.ExportDoc) error {
 
 	// Delete all rows in reverse FK dependency order to satisfy constraints.
 	deleteStmts := []string{
+		`DELETE FROM audit_log;`,
 		`DELETE FROM dividend_entries;`,
 		`DELETE FROM withholding_tax_defaults;`,
+		`DELETE FROM memberships;`,
+		`DELETE FROM group_users;`,
 		`DELETE FROM depots;`,
 		`DELETE FROM users;`,
 		`DELETE FROM securities;`,
 		`DELETE FROM currencies;`,
+		// Keep id=1 (system group) — re-insert all others.
+		`DELETE FROM groups WHERE id != 1;`,
 	}
 	for _, stmt := range deleteStmts {
 		if _, err := tx.Exec(stmt); err != nil {
@@ -101,17 +106,40 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 		}
 	}
 
-	// 2. Insert depots (references users).
+	// 2. Insert groups (skip system group, already present).
+	for _, g := range doc.Data.Groups {
+		if g.ID == 1 {
+			continue
+		}
+		if _, err := tx.Exec(`
+INSERT INTO groups (id, name, created_at, updated_at)
+VALUES (?, ?, ?, ?);
+`, g.ID, g.Name, g.CreatedAt, g.UpdatedAt); err != nil {
+			return fmt.Errorf("IMPORT_FAILED: insert group id=%d: %w", g.ID, err)
+		}
+	}
+
+	// 3. Insert group_users.
+	for _, gu := range doc.Data.GroupUsers {
+		if _, err := tx.Exec(`
+INSERT INTO group_users (group_id, user_id)
+VALUES (?, ?);
+`, gu.GroupID, gu.UserID); err != nil {
+			return fmt.Errorf("IMPORT_FAILED: insert group_user group_id=%d user_id=%d: %w", gu.GroupID, gu.UserID, err)
+		}
+	}
+
+	// 4. Insert depots.
 	for _, d := range doc.Data.Depots {
 		if _, err := tx.Exec(`
-INSERT INTO depots (id, user_id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-`, d.ID, d.UserID, d.Name, d.BrokerName, d.AccountNumber, d.BaseCurrency, d.Description, d.Status, d.CreatedAt, d.UpdatedAt); err != nil {
+INSERT INTO depots (id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+`, d.ID, d.Name, d.BrokerName, d.AccountNumber, d.BaseCurrency, d.Description, d.Status, d.CreatedAt, d.UpdatedAt); err != nil {
 			return fmt.Errorf("IMPORT_FAILED: insert depot id=%d: %w", d.ID, err)
 		}
 	}
 
-	// 3. Insert securities.
+	// 5. Insert securities.
 	for _, s := range doc.Data.Securities {
 		if _, err := tx.Exec(`
 INSERT INTO securities (id, name, isin, wkn, symbol, status, created_at, updated_at)
@@ -121,7 +149,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 		}
 	}
 
-	// 4. Insert currencies.
+	// 6. Insert currencies.
 	for _, c := range doc.Data.Currencies {
 		if _, err := tx.Exec(`
 INSERT INTO currencies (id, currency, name, status, created_at, updated_at)
@@ -131,7 +159,7 @@ VALUES (?, ?, ?, ?, ?, ?);
 		}
 	}
 
-	// 5. Insert withholding_tax_defaults (depot_id is nullable: 0 → NULL).
+	// 7. Insert withholding_tax_defaults (depot_id is nullable: 0 → NULL).
 	for _, w := range doc.Data.WithholdingTaxDefaults {
 		var depotID interface{}
 		if w.DepotID > 0 {
@@ -145,11 +173,21 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 		}
 	}
 
-	// 6. Insert dividend_entries (references users, depots, securities).
+	// 8. Insert memberships.
+	for _, m := range doc.Data.Memberships {
+		if _, err := tx.Exec(`
+INSERT INTO memberships (entity_type, entity_id, user_id, role, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?);
+`, m.EntityType, m.EntityID, m.UserID, m.Role, m.CreatedAt, m.UpdatedAt); err != nil {
+			return fmt.Errorf("IMPORT_FAILED: insert membership entity_type=%s entity_id=%d user_id=%d: %w", m.EntityType, m.EntityID, m.UserID, err)
+		}
+	}
+
+	// 9. Insert dividend_entries (references depots and securities).
 	for _, e := range doc.Data.DividendEntries {
 		if _, err := tx.Exec(`
 INSERT INTO dividend_entries (
-  id, user_id, depot_id, security_id, pay_date, ex_date,
+  id, depot_id, security_id, pay_date, ex_date,
   security_name, security_isin, security_wkn, security_symbol,
   quantity, dividend_per_unit_amount, dividend_per_unit_currency,
   fx_rate_label, fx_rate,
@@ -162,8 +200,8 @@ INSERT INTO dividend_entries (
   foreign_fees_amount, foreign_fees_currency,
   note, calc_gross_amount_base, calc_after_withholding_amount_base,
   created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-`, e.ID, e.UserID, e.DepotID, e.SecurityID, e.PayDate, e.ExDate,
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+`, e.ID, e.DepotID, e.SecurityID, e.PayDate, e.ExDate,
 			e.SecurityName, e.SecurityISIN, e.SecurityWKN, e.SecuritySymbol,
 			e.Quantity, e.DividendPerUnitAmount, e.DividendPerUnitCurrency,
 			e.FXRateLabel, e.FXRate,

@@ -14,6 +14,7 @@ import (
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/controller"
 	"github.com/geschke/schrevind/pkg/db"
+	"github.com/geschke/schrevind/pkg/grrt"
 	"github.com/geschke/schrevind/pkg/users"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
@@ -57,7 +58,7 @@ func TestAuthLoginLogoutFlow(t *testing.T) {
 
 	store := sessions.NewCookieStore([]byte(config.Cfg.WebUI.SessionKey))
 	authCtl := controller.NewAuthController(database, store, config.Cfg.WebUI.SessionName)
-	usersCtl := controller.NewUsersController(database, store, config.Cfg.WebUI.SessionName)
+	usersCtl := controller.NewUsersController(database, store, config.Cfg.WebUI.SessionName, grrt.New(database))
 
 	r := gin.New()
 	r.POST("/api/auth/login", authCtl.PostLogin)

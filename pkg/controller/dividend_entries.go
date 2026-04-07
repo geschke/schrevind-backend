@@ -8,6 +8,7 @@ import (
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/cors"
 	"github.com/geschke/schrevind/pkg/db"
+	"github.com/geschke/schrevind/pkg/grrt"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
 )
@@ -16,14 +17,16 @@ type DividendEntriesController struct {
 	DB          *db.DB
 	Store       sessions.Store
 	SessionName string
+	G           *grrt.Grrt
 }
 
 // NewDividendEntriesController constructs and returns a new instance.
-func NewDividendEntriesController(database *db.DB, store sessions.Store, sessionName string) *DividendEntriesController {
+func NewDividendEntriesController(database *db.DB, store sessions.Store, sessionName string, g *grrt.Grrt) *DividendEntriesController {
 	return &DividendEntriesController{
 		DB:          database,
 		Store:       store,
 		SessionName: sessionName,
+		G:           g,
 	}
 }
 
@@ -33,7 +36,6 @@ func (ct DividendEntriesController) Options(c *gin.Context) {
 }
 
 type addDividendEntryRequest struct {
-	UserID     int64  `json:"UserID"`
 	DepotID    int64  `json:"DepotID"`
 	SecurityID int64  `json:"SecurityID"`
 	PayDate    string `json:"PayDate"`
@@ -77,7 +79,6 @@ type addDividendEntryRequest struct {
 }
 
 type updateDividendEntryRequest struct {
-	UserID     *int64  `json:"UserID"`
 	DepotID    *int64  `json:"DepotID"`
 	SecurityID *int64  `json:"SecurityID"`
 	PayDate    *string `json:"PayDate"`
@@ -144,6 +145,23 @@ func (ct DividendEntriesController) ensureAuthorized(c *gin.Context) bool {
 	return true
 }
 
+// currentSessionUserID performs its package-specific operation.
+func (ct DividendEntriesController) currentSessionUserID(c *gin.Context) (int64, bool) {
+	sess, _ := ct.Store.Get(c.Request, ct.SessionName)
+	if sess == nil {
+		return 0, false
+	}
+	raw, ok := sess.Values["id"]
+	if !ok {
+		return 0, false
+	}
+	id, ok := raw.(int64)
+	if !ok {
+		return 0, false
+	}
+	return id, true
+}
+
 // parseDividendEntryID performs its package-specific operation.
 func parseDividendEntryID(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
@@ -154,17 +172,7 @@ func parseDividendEntryID(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
-// parseUserIDParam performs its package-specific operation.
-func parseUserIDParam(c *gin.Context) (int64, bool) {
-	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("user_id")), 10, 64)
-	if err != nil || id <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
-		return 0, false
-	}
-	return id, true
-}
-
-// parseDepotIDParam performs its package-specific operation.
+// parseDepotIDParamForDividendEntries performs its package-specific operation.
 func parseDepotIDParamForDividendEntries(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("depot_id")), 10, 64)
 	if err != nil || id <= 0 {
@@ -184,21 +192,47 @@ func parseSecurityIDParam(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
-// parseDateRange performs its package-specific operation.
-func parseDateRange(c *gin.Context) (string, string, bool) {
+// parseDividendEntryListParams performs its package-specific operation.
+func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, string, bool) {
+	limit := 20
+	if v := strings.TrimSpace(c.Query("limit")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 || n > 100 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_LIMIT"})
+			return 0, 0, "", "", "", false
+		}
+		limit = n
+	}
+
+	offset := 0
+	if v := strings.TrimSpace(c.Query("offset")); v != "" {
+		n, err := strconv.Atoi(v)
+		if err != nil || n < 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_OFFSET"})
+			return 0, 0, "", "", "", false
+		}
+		offset = n
+	}
+
+	sortBy := "PayDate"
+	if v := strings.TrimSpace(c.Query("sort")); v != "" {
+		switch v {
+		case "PayDate", "ExDate", "SecurityName":
+			sortBy = v
+		default:
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_SORT"})
+			return 0, 0, "", "", "", false
+		}
+	}
+
 	fromDate := strings.TrimSpace(c.Query("from"))
 	toDate := strings.TrimSpace(c.Query("to"))
-
-	if fromDate == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "MISSING_FROM_DATE"})
-		return "", "", false
-	}
-	if toDate == "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "MISSING_TO_DATE"})
-		return "", "", false
+	if fromDate != "" && toDate != "" && fromDate > toDate {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_DATE_RANGE"})
+		return 0, 0, "", "", "", false
 	}
 
-	return fromDate, toDate, true
+	return limit, offset, sortBy, fromDate, toDate, true
 }
 
 // normalizeDividendEntryPayload performs its package-specific operation.
@@ -230,9 +264,6 @@ func normalizeDividendEntryPayload(entry db.DividendEntry) (db.DividendEntry, st
 	entry.ForeignFeesCurrency = strings.TrimSpace(entry.ForeignFeesCurrency)
 	entry.Note = strings.TrimSpace(entry.Note)
 
-	if entry.UserID <= 0 {
-		return entry, "INVALID_USER_ID"
-	}
 	if entry.DepotID <= 0 {
 		return entry, "INVALID_DEPOT_ID"
 	}
@@ -296,13 +327,29 @@ func (ct DividendEntriesController) GetByID(c *gin.Context) {
 		return
 	}
 
-	item, err := ct.DB.GetDividendEntryByID(id)
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	item, found, err := ct.DB.GetDividendEntryByID(id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if item == nil {
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "DIVIDEND_ENTRY_NOT_FOUND"})
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:list", item.DepotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
 		return
 	}
 
@@ -321,12 +368,50 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 		return
 	}
 
-	userID, ok := parseUserIDParam(c)
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	requestedUserID, err := strconv.ParseInt(strings.TrimSpace(c.Param("user_id")), 10, 64)
+	if err != nil || requestedUserID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
+		return
+	}
+	if requestedUserID != sessionUserID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoAny(sessionUserID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	scope, err := ct.G.ScopeForAction(sessionUserID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	limit, offset, sortBy, fromDate, toDate, ok := parseDividendEntryListParams(c)
 	if !ok {
 		return
 	}
 
-	items, err := ct.DB.ListDividendEntriesByUserID(userID)
+	items, err := ct.DB.ListAccessibleDividendEntriesByUser(requestedUserID, scope.All, scope.Roles, limit, offset, sortBy, fromDate, toDate)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	count, err := ct.DB.CountAccessibleDividendEntriesByUser(requestedUserID, scope.All, scope.Roles, fromDate, toDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -334,7 +419,7 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"count":   int64(len(items)),
+		"count":   count,
 		"items":   items,
 	})
 }
@@ -353,7 +438,34 @@ func (ct DividendEntriesController) GetListByDepot(c *gin.Context) {
 		return
 	}
 
-	items, err := ct.DB.ListDividendEntriesByDepotID(depotID)
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:list", depotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+		return
+	}
+
+	limit, offset, sortBy, fromDate, toDate, ok := parseDividendEntryListParams(c)
+	if !ok {
+		return
+	}
+
+	items, err := ct.DB.ListDividendEntriesByDepotID(depotID, limit, offset, sortBy, fromDate, toDate)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	count, err := ct.DB.CountDividendEntriesByDepotID(depotID, fromDate, toDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -361,7 +473,7 @@ func (ct DividendEntriesController) GetListByDepot(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"count":   int64(len(items)),
+		"count":   count,
 		"items":   items,
 	})
 }
@@ -380,7 +492,18 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		return
 	}
 
-	items, err := ct.DB.ListDividendEntriesBySecurityID(securityID)
+	limit, offset, sortBy, fromDate, toDate, ok := parseDividendEntryListParams(c)
+	if !ok {
+		return
+	}
+
+	items, err := ct.DB.ListDividendEntriesBySecurityID(securityID, limit, offset, sortBy, fromDate, toDate)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	count, err := ct.DB.CountDividendEntriesBySecurityID(securityID, fromDate, toDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -388,100 +511,7 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
-		"count":   int64(len(items)),
-		"items":   items,
-	})
-}
-
-// GET /api/dividend-entries/by-user/:user_id/range
-func (ct DividendEntriesController) GetListByUserAndRange(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
-		return
-	}
-	if !ct.ensureAuthorized(c) {
-		return
-	}
-
-	userID, ok := parseUserIDParam(c)
-	if !ok {
-		return
-	}
-	fromDate, toDate, ok := parseDateRange(c)
-	if !ok {
-		return
-	}
-
-	items, err := ct.DB.ListDividendEntriesByUserIDAndDateRange(userID, fromDate, toDate)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"count":   int64(len(items)),
-		"items":   items,
-	})
-}
-
-// GET /api/dividend-entries/by-depot/:depot_id/range
-func (ct DividendEntriesController) GetListByDepotAndRange(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
-		return
-	}
-	if !ct.ensureAuthorized(c) {
-		return
-	}
-
-	depotID, ok := parseDepotIDParamForDividendEntries(c)
-	if !ok {
-		return
-	}
-	fromDate, toDate, ok := parseDateRange(c)
-	if !ok {
-		return
-	}
-
-	items, err := ct.DB.ListDividendEntriesByDepotIDAndDateRange(depotID, fromDate, toDate)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"count":   int64(len(items)),
-		"items":   items,
-	})
-}
-
-// GET /api/dividend-entries/by-security/:security_id/range
-func (ct DividendEntriesController) GetListBySecurityAndRange(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
-		return
-	}
-	if !ct.ensureAuthorized(c) {
-		return
-	}
-
-	securityID, ok := parseSecurityIDParam(c)
-	if !ok {
-		return
-	}
-	fromDate, toDate, ok := parseDateRange(c)
-	if !ok {
-		return
-	}
-
-	items, err := ct.DB.ListDividendEntriesBySecurityIDAndDateRange(securityID, fromDate, toDate)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-
-	c.JSON(http.StatusOK, gin.H{
-		"success": true,
-		"count":   int64(len(items)),
+		"count":   count,
 		"items":   items,
 	})
 }
@@ -495,14 +525,29 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		return
 	}
 
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
 	var req addDividendEntryRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
 	}
 
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:create", req.DepotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+		return
+	}
+
 	entry, message := normalizeDividendEntryPayload(db.DividendEntry{
-		UserID:                                 req.UserID,
 		DepotID:                                req.DepotID,
 		SecurityID:                             req.SecurityID,
 		PayDate:                                req.PayDate,
@@ -544,6 +589,13 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		return
 	}
 
+	_ = ct.DB.WriteAuditLog(&db.AuditLog{
+		UserID:     sessionUserID,
+		Action:     db.ActionCreate,
+		EntityType: db.EntityTypeDividendEntry,
+		EntityID:   entry.ID,
+	})
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"item":    entry,
@@ -564,13 +616,29 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	existing, err := ct.DB.GetDividendEntryByID(id)
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	existing, found, err := ct.DB.GetDividendEntryByID(id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if existing == nil {
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "DIVIDEND_ENTRY_NOT_FOUND"})
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:edit", existing.DepotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
 		return
 	}
 
@@ -580,10 +648,7 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	updated := *existing
-	if req.UserID != nil {
-		updated.UserID = *req.UserID
-	}
+	updated := existing
 	if req.DepotID != nil {
 		updated.DepotID = *req.DepotID
 	}
@@ -682,6 +747,13 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 		return
 	}
 
+	_ = ct.DB.WriteAuditLog(&db.AuditLog{
+		UserID:     sessionUserID,
+		Action:     db.ActionUpdate,
+		EntityType: db.EntityTypeDividendEntry,
+		EntityID:   id,
+	})
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"item":    updated,
@@ -702,13 +774,29 @@ func (ct DividendEntriesController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	item, err := ct.DB.GetDividendEntryByID(id)
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	item, found, err := ct.DB.GetDividendEntryByID(id)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if item == nil {
+	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "DIVIDEND_ENTRY_NOT_FOUND"})
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:delete", item.DepotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
 		return
 	}
 
@@ -716,6 +804,13 @@ func (ct DividendEntriesController) PostDelete(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
+
+	_ = ct.DB.WriteAuditLog(&db.AuditLog{
+		UserID:     sessionUserID,
+		Action:     db.ActionDelete,
+		EntityType: db.EntityTypeDividendEntry,
+		EntityID:   id,
+	})
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

@@ -37,6 +37,9 @@ type ExportDoc struct {
 // ExportData holds one slice per exported table.
 type ExportData struct {
 	Users                  []db.User                  `json:"users"`
+	Groups                 []db.Group                 `json:"groups"`
+	GroupUsers             []db.GroupUser             `json:"group_users"`
+	Memberships            []db.Membership            `json:"memberships"`
 	Depots                 []db.Depot                 `json:"depots"`
 	Securities             []db.Security              `json:"securities"`
 	Currencies             []db.Currency              `json:"currencies"`
@@ -61,6 +64,21 @@ func buildExportJSON(database *db.DB) ([]byte, error) {
 	users, err := database.ListAllUsersForExport(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("export users: %w", err)
+	}
+
+	groups, err := database.ListGroups()
+	if err != nil {
+		return nil, fmt.Errorf("export groups: %w", err)
+	}
+
+	groupUsers, err := database.ListAllGroupUsers()
+	if err != nil {
+		return nil, fmt.Errorf("export group_users: %w", err)
+	}
+
+	memberships, err := database.ListAllMemberships()
+	if err != nil {
+		return nil, fmt.Errorf("export memberships: %w", err)
 	}
 
 	depots, err := database.ListAllDepots()
@@ -94,6 +112,9 @@ func buildExportJSON(database *db.DB) ([]byte, error) {
 		ExportedAt: time.Now().UTC(),
 		Data: ExportData{
 			Users:                  users,
+			Groups:                 groups,
+			GroupUsers:             groupUsers,
+			Memberships:            memberships,
 			Depots:                 depots,
 			Securities:             securities,
 			Currencies:             currencies,

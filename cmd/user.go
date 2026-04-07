@@ -25,6 +25,7 @@ func init() {
 	userCreateCmd.Flags().StringVar(&userCreateLastName, "last-name", "", "Last name (optional)")
 	userCreateCmd.Flags().BoolVar(&userCreatePasswordStdin, "password-stdin", false, "Read password from stdin (recommended)")
 	userCreateCmd.Flags().StringVar(&userCreatePassword, "password", "", "Password (NOT recommended; may leak via shell history)")
+	userCreateCmd.Flags().BoolVar(&userCreateSystem, "system", false, "Grant system-admin role (use after import to create an admin user)")
 
 	userDeleteCmd.Flags().Int64Var(&userDeleteID, "id", 0, "User id")
 	userDeleteCmd.Flags().StringVar(&userDeleteEmail, "email", "", "User email")
@@ -43,6 +44,7 @@ var (
 	userCreateLastName      string
 	userCreatePassword      string
 	userCreatePasswordStdin bool
+	userCreateSystem        bool
 )
 
 var userCreateCmd = &cobra.Command{
@@ -69,10 +71,11 @@ var userCreateCmd = &cobra.Command{
 		defer cancel()
 
 		id, err := users.Create(ctx, database, users.CreateParams{
-			Email:     email,
-			Password:  pw,
-			FirstName: userCreateFirstName,
-			LastName:  userCreateLastName,
+			Email:           email,
+			Password:        pw,
+			FirstName:       userCreateFirstName,
+			LastName:        userCreateLastName,
+			MakeSystemAdmin: userCreateSystem,
 		})
 		if err != nil {
 			return err

@@ -9,7 +9,6 @@ import (
 
 type Depot struct {
 	ID            int64  `json:"ID"`
-	UserID        int64  `json:"UserID,omitempty"`
 	Name          string `json:"Name,omitempty"`
 	BrokerName    string `json:"BrokerName,omitempty"`
 	AccountNumber string `json:"AccountNumber,omitempty"`
@@ -29,10 +28,6 @@ func normalizeDepot(depot Depot) (Depot, error) {
 	depot.Description = strings.TrimSpace(depot.Description)
 	depot.Status = strings.TrimSpace(depot.Status)
 
-	if depot.UserID <= 0 {
-		return Depot{}, fmt.Errorf("userID must be > 0")
-	}
-
 	now := time.Now().Unix()
 	if depot.CreatedAt == 0 {
 		depot.CreatedAt = now
@@ -43,13 +38,10 @@ func normalizeDepot(depot Depot) (Depot, error) {
 }
 
 // scanDepot performs its package-specific operation.
-func scanDepot(scanner interface {
-	Scan(dest ...any) error
-}) (*Depot, error) {
+func scanDepot(row *sql.Row) (Depot, error) {
 	var depot Depot
-	if err := scanner.Scan(
+	if err := row.Scan(
 		&depot.ID,
-		&depot.UserID,
 		&depot.Name,
 		&depot.BrokerName,
 		&depot.AccountNumber,
@@ -59,9 +51,9 @@ func scanDepot(scanner interface {
 		&depot.CreatedAt,
 		&depot.UpdatedAt,
 	); err != nil {
-		return nil, err
+		return Depot{}, err
 	}
-	return &depot, nil
+	return depot, nil
 }
 
 // CreateDepot creates a new record.
@@ -80,9 +72,9 @@ func (d *DB) CreateDepot(depot *Depot) error {
 
 	res, err := d.SQL.Exec(`
 INSERT INTO depots (
-  user_id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-`, normalized.UserID, normalized.Name, normalized.BrokerName, normalized.AccountNumber, normalized.BaseCurrency, normalized.Description, normalized.Status, normalized.CreatedAt, normalized.UpdatedAt)
+  name, broker_name, account_number, base_currency, description, status, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+`, normalized.Name, normalized.BrokerName, normalized.AccountNumber, normalized.BaseCurrency, normalized.Description, normalized.Status, normalized.CreatedAt, normalized.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create depot: %w", err)
 	}
@@ -116,8 +108,7 @@ func (d *DB) UpdateDepot(depot *Depot) error {
 
 	_, err = d.SQL.Exec(`
 UPDATE depots
-   SET user_id = ?,
-       name = ?,
+   SET name = ?,
        broker_name = ?,
        account_number = ?,
        base_currency = ?,
@@ -125,7 +116,7 @@ UPDATE depots
        status = ?,
        updated_at = ?
  WHERE id = ?;
-`, normalized.UserID, normalized.Name, normalized.BrokerName, normalized.AccountNumber, normalized.BaseCurrency, normalized.Description, normalized.Status, normalized.UpdatedAt, normalized.ID)
+`, normalized.Name, normalized.BrokerName, normalized.AccountNumber, normalized.BaseCurrency, normalized.Description, normalized.Status, normalized.UpdatedAt, normalized.ID)
 	if err != nil {
 		return fmt.Errorf("update depot: %w", err)
 	}
@@ -135,16 +126,16 @@ UPDATE depots
 }
 
 // GetDepotByID returns data for the requested input.
-func (d *DB) GetDepotByID(id int64) (*Depot, error) {
+func (d *DB) GetDepotByID(id int64) (Depot, bool, error) {
 	if d == nil || d.SQL == nil {
-		return nil, fmt.Errorf("db not initialized")
+		return Depot{}, false, fmt.Errorf("db not initialized")
 	}
 	if id <= 0 {
-		return nil, fmt.Errorf("id must be > 0")
+		return Depot{}, false, fmt.Errorf("id must be > 0")
 	}
 
 	row := d.SQL.QueryRow(`
-SELECT id, user_id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at
+SELECT id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at
   FROM depots
  WHERE id = ?
  LIMIT 1;
@@ -152,17 +143,18 @@ SELECT id, user_id, name, broker_name, account_number, base_currency, descriptio
 
 	depot, err := scanDepot(row)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return Depot{}, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get depot by id: %w", err)
+		return Depot{}, false, fmt.Errorf("get depot by id: %w", err)
 	}
 
-	return depot, nil
+	return depot, true, nil
 }
 
-// ListDepotsByUserID returns a list for the requested filter.
-func (d *DB) ListDepotsByUserID(userID int64) ([]Depot, error) {
+// ListDepotsByUserMembership returns all depots the user has direct membership on,
+// regardless of status. Used to build the depot selector in the UI.
+func (d *DB) ListDepotsByUserMembership(userID int64) ([]Depot, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
@@ -171,62 +163,85 @@ func (d *DB) ListDepotsByUserID(userID int64) ([]Depot, error) {
 	}
 
 	rows, err := d.SQL.Query(`
-SELECT id, user_id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at
-  FROM depots
- WHERE user_id = ?
- ORDER BY id ASC;
-`, userID)
+SELECT d.id, d.name, d.broker_name, d.account_number, d.base_currency, d.description, d.status, d.created_at, d.updated_at
+  FROM depots d
+  JOIN memberships m ON m.entity_type = ? AND m.entity_id = d.id
+ WHERE m.user_id = ?
+ ORDER BY d.id ASC;
+`, EntityTypeDepot, userID)
 	if err != nil {
-		return nil, fmt.Errorf("list depots by user: %w", err)
+		return nil, fmt.Errorf("list depots by user membership: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	out := make([]Depot, 0)
 	for rows.Next() {
-		depot, err := scanDepot(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan depot: %w", err)
+		var depot Depot
+		if err := rows.Scan(
+			&depot.ID,
+			&depot.Name,
+			&depot.BrokerName,
+			&depot.AccountNumber,
+			&depot.BaseCurrency,
+			&depot.Description,
+			&depot.Status,
+			&depot.CreatedAt,
+			&depot.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan depot by membership: %w", err)
 		}
-		out = append(out, *depot)
+		out = append(out, depot)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate depots by user: %w", err)
+		return nil, fmt.Errorf("iterate depots by user membership: %w", err)
 	}
 
 	return out, nil
 }
 
-// ListActiveDepotsByUserID returns a list for the requested filter.
-func (d *DB) ListActiveDepotsByUserID(userID int64) ([]Depot, error) {
+// ListDepotsByGroupID returns all depots accessible to any user in the given group,
+// via their depot memberships. Used for the group admin depot overview.
+func (d *DB) ListDepotsByGroupID(groupID int64) ([]Depot, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
-	if userID <= 0 {
-		return nil, fmt.Errorf("userID must be > 0")
+	if groupID <= 0 {
+		return nil, fmt.Errorf("groupID must be > 0")
 	}
 
 	rows, err := d.SQL.Query(`
-SELECT id, user_id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at
-  FROM depots
- WHERE user_id = ?
-   AND status = ?
- ORDER BY id ASC;
-`, userID, "active")
+SELECT DISTINCT d.id, d.name, d.broker_name, d.account_number, d.base_currency, d.description, d.status, d.created_at, d.updated_at
+  FROM depots d
+  JOIN memberships m ON m.entity_type = ? AND m.entity_id = d.id
+  JOIN group_users gu ON gu.user_id = m.user_id
+ WHERE gu.group_id = ?
+ ORDER BY d.id ASC;
+`, EntityTypeDepot, groupID)
 	if err != nil {
-		return nil, fmt.Errorf("list active depots by user: %w", err)
+		return nil, fmt.Errorf("list depots by group: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	out := make([]Depot, 0)
 	for rows.Next() {
-		depot, err := scanDepot(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan active depot: %w", err)
+		var depot Depot
+		if err := rows.Scan(
+			&depot.ID,
+			&depot.Name,
+			&depot.BrokerName,
+			&depot.AccountNumber,
+			&depot.BaseCurrency,
+			&depot.Description,
+			&depot.Status,
+			&depot.CreatedAt,
+			&depot.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan depot by group: %w", err)
 		}
-		out = append(out, *depot)
+		out = append(out, depot)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate active depots by user: %w", err)
+		return nil, fmt.Errorf("iterate depots by group: %w", err)
 	}
 
 	return out, nil
@@ -239,7 +254,7 @@ func (d *DB) ListAllDepots() ([]Depot, error) {
 	}
 
 	rows, err := d.SQL.Query(`
-SELECT id, user_id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at
+SELECT id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at
   FROM depots
  ORDER BY id ASC;
 `)
@@ -250,11 +265,21 @@ SELECT id, user_id, name, broker_name, account_number, base_currency, descriptio
 
 	out := make([]Depot, 0)
 	for rows.Next() {
-		depot, err := scanDepot(rows)
-		if err != nil {
+		var depot Depot
+		if err := rows.Scan(
+			&depot.ID,
+			&depot.Name,
+			&depot.BrokerName,
+			&depot.AccountNumber,
+			&depot.BaseCurrency,
+			&depot.Description,
+			&depot.Status,
+			&depot.CreatedAt,
+			&depot.UpdatedAt,
+		); err != nil {
 			return nil, fmt.Errorf("scan depot for export: %w", err)
 		}
-		out = append(out, *depot)
+		out = append(out, depot)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate depots for export: %w", err)

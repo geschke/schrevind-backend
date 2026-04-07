@@ -68,8 +68,8 @@ func (d *DB) Migrate() error {
 CREATE TABLE IF NOT EXISTS users (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   password      TEXT NOT NULL DEFAULT '',
-  firstname    TEXT NOT NULL DEFAULT '',
-  lastname     TEXT NOT NULL DEFAULT '',
+  firstname			TEXT NOT NULL DEFAULT '',
+  lastname      TEXT NOT NULL DEFAULT '',
   email         TEXT NOT NULL DEFAULT '',
   status        TEXT NOT NULL DEFAULT 'active',
   created_at    INTEGER NOT NULL DEFAULT 0,
@@ -80,9 +80,47 @@ CREATE TABLE IF NOT EXISTS users (
 		`CREATE INDEX IF NOT EXISTS idx_users_status ON users(status);`,
 
 		`
+CREATE TABLE IF NOT EXISTS groups (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  name        TEXT NOT NULL DEFAULT '',
+  created_at  INTEGER NOT NULL DEFAULT 0,
+  updated_at  INTEGER NOT NULL DEFAULT 0
+);
+`,
+		// group_id = 1 is reserved as the system group (Unix convention, analogous to gid=0).
+		`INSERT OR IGNORE INTO groups (id, name, created_at, updated_at) VALUES (1, 'System', 0, 0);`,
+
+		`
+CREATE TABLE IF NOT EXISTS group_users (
+  group_id   INTEGER NOT NULL,
+  user_id    INTEGER NOT NULL,
+  PRIMARY KEY (group_id, user_id),
+  FOREIGN KEY(group_id) REFERENCES groups(id),
+  FOREIGN KEY(user_id)  REFERENCES users(id)
+);
+`,
+		`CREATE INDEX IF NOT EXISTS idx_group_users_user_id ON group_users(user_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_group_users_group_id ON group_users(group_id);`,
+
+		`
+CREATE TABLE IF NOT EXISTS memberships (
+  entity_type  TEXT    NOT NULL,
+  entity_id    INTEGER NOT NULL,
+  user_id      INTEGER NOT NULL,
+  role         TEXT    NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL DEFAULT 0,
+  updated_at   INTEGER NOT NULL DEFAULT 0,
+
+  PRIMARY KEY (entity_type, entity_id, user_id),
+  FOREIGN KEY(user_id) REFERENCES users(id)
+);
+`,
+		`CREATE INDEX IF NOT EXISTS idx_memberships_user_id ON memberships(user_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_memberships_entity ON memberships(entity_type, entity_id);`,
+
+		`
 CREATE TABLE IF NOT EXISTS depots (
   id             INTEGER PRIMARY KEY AUTOINCREMENT,
-  user_id        INTEGER NOT NULL,
   name           TEXT NOT NULL DEFAULT '',
   broker_name    TEXT NOT NULL DEFAULT '',
   account_number TEXT NOT NULL DEFAULT '',
@@ -90,14 +128,10 @@ CREATE TABLE IF NOT EXISTS depots (
   description    TEXT NOT NULL DEFAULT '',
   status         TEXT NOT NULL DEFAULT 'active',
   created_at     INTEGER NOT NULL DEFAULT 0,
-  updated_at     INTEGER NOT NULL DEFAULT 0,
-
-  FOREIGN KEY(user_id) REFERENCES users(id)
+  updated_at     INTEGER NOT NULL DEFAULT 0
 );
 `,
-		`CREATE INDEX IF NOT EXISTS idx_depots_user_id ON depots(user_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_depots_status ON depots(status);`,
-		`CREATE INDEX IF NOT EXISTS idx_depots_user_status ON depots(user_id, status);`,
 
 		`
 CREATE TABLE IF NOT EXISTS securities (
@@ -139,7 +173,6 @@ CREATE TABLE IF NOT EXISTS withholding_tax_defaults (
 CREATE TABLE IF NOT EXISTS dividend_entries (
   id                                       INTEGER PRIMARY KEY AUTOINCREMENT,
 
-  user_id                                  INTEGER NOT NULL,
   depot_id                                 INTEGER NOT NULL,
   security_id                              INTEGER NOT NULL,
 
@@ -188,19 +221,16 @@ CREATE TABLE IF NOT EXISTS dividend_entries (
   created_at                               INTEGER NOT NULL DEFAULT 0,
   updated_at                               INTEGER NOT NULL DEFAULT 0,
 
-  FOREIGN KEY(user_id) REFERENCES users(id),
   FOREIGN KEY(depot_id) REFERENCES depots(id),
   FOREIGN KEY(security_id) REFERENCES securities(id)
 );
 `,
-		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_user_id ON dividend_entries(user_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_depot_id ON dividend_entries(depot_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_security_id ON dividend_entries(security_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_pay_date ON dividend_entries(pay_date);`,
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_ex_date ON dividend_entries(ex_date);`,
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_depot_pay_date ON dividend_entries(depot_id, pay_date);`,
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_security_pay_date ON dividend_entries(security_id, pay_date);`,
-		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_user_pay_date ON dividend_entries(user_id, pay_date);`,
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_security_isin ON dividend_entries(security_isin);`,
 		`CREATE INDEX IF NOT EXISTS idx_dividend_entries_withholding_country_code ON dividend_entries(withholding_tax_country_code);`,
 
@@ -224,6 +254,21 @@ VALUES ('EUR', 'Euro', 0, 0);
 INSERT OR IGNORE INTO currencies (currency, name, created_at, updated_at)
 VALUES ('USD', 'US Dollar', 0, 0);
 `,
+
+		`
+CREATE TABLE IF NOT EXISTS audit_log (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id      INTEGER NOT NULL DEFAULT 0,
+  action       TEXT    NOT NULL DEFAULT '',
+  entity_type  TEXT    NOT NULL DEFAULT '',
+  entity_id    INTEGER NOT NULL DEFAULT 0,
+  detail       TEXT    NOT NULL DEFAULT '',
+  created_at   INTEGER NOT NULL DEFAULT 0
+);
+`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_user_id ON audit_log(user_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_entity ON audit_log(entity_type, entity_id);`,
+		`CREATE INDEX IF NOT EXISTS idx_audit_log_created_at ON audit_log(created_at);`,
 	}
 
 	for _, s := range stmts {

@@ -10,7 +10,6 @@ import (
 type DividendEntry struct {
 	ID int64 `json:"ID"`
 
-	UserID     int64 `json:"UserID,omitempty"`
 	DepotID    int64 `json:"DepotID,omitempty"`
 	SecurityID int64 `json:"SecurityID,omitempty"`
 
@@ -91,9 +90,6 @@ func normalizeDividendEntry(entry DividendEntry) (DividendEntry, error) {
 	entry.CalcGrossAmountBase = strings.TrimSpace(entry.CalcGrossAmountBase)
 	entry.CalcAfterWithholdingAmountBase = strings.TrimSpace(entry.CalcAfterWithholdingAmountBase)
 
-	if entry.UserID <= 0 {
-		return DividendEntry{}, fmt.Errorf("userID must be > 0")
-	}
 	if entry.DepotID <= 0 {
 		return DividendEntry{}, fmt.Errorf("depotID must be > 0")
 	}
@@ -110,135 +106,201 @@ func normalizeDividendEntry(entry DividendEntry) (DividendEntry, error) {
 	return entry, nil
 }
 
-// scanDividendEntry performs its package-specific operation.
-func scanDividendEntry(scanner interface {
-	Scan(dest ...any) error
-}) (*DividendEntry, error) {
-	var entry DividendEntry
-	if err := scanner.Scan(
-		&entry.ID,
-		&entry.UserID,
-		&entry.DepotID,
-		&entry.SecurityID,
-		&entry.PayDate,
-		&entry.ExDate,
-		&entry.SecurityName,
-		&entry.SecurityISIN,
-		&entry.SecurityWKN,
-		&entry.SecuritySymbol,
-		&entry.Quantity,
-		&entry.DividendPerUnitAmount,
-		&entry.DividendPerUnitCurrency,
-		&entry.FXRateLabel,
-		&entry.FXRate,
-		&entry.GrossAmount,
-		&entry.GrossCurrency,
-		&entry.PayoutAmount,
-		&entry.PayoutCurrency,
-		&entry.WithholdingTaxCountryCode,
-		&entry.WithholdingTaxPercent,
-		&entry.WithholdingTaxAmount,
-		&entry.WithholdingTaxCurrency,
-		&entry.WithholdingTaxAmountCredit,
-		&entry.WithholdingTaxAmountCreditCurrency,
-		&entry.WithholdingTaxAmountRefundable,
-		&entry.WithholdingTaxAmountRefundableCurrency,
-		&entry.ForeignFeesAmount,
-		&entry.ForeignFeesCurrency,
-		&entry.Note,
-		&entry.CalcGrossAmountBase,
-		&entry.CalcAfterWithholdingAmountBase,
-		&entry.CreatedAt,
-		&entry.UpdatedAt,
-	); err != nil {
-		return nil, err
-	}
-	return &entry, nil
-}
-
-// listDividendEntriesByColumn performs its package-specific operation.
-func (d *DB) listDividendEntriesByColumn(column string, value int64) ([]DividendEntry, error) {
-	if d == nil || d.SQL == nil {
-		return nil, fmt.Errorf("db not initialized")
-	}
-	if value <= 0 {
-		return nil, fmt.Errorf("%s must be > 0", column)
-	}
-
-	rows, err := d.SQL.Query(`
-SELECT id, user_id, depot_id, security_id, pay_date, ex_date, security_name, security_isin, security_wkn, security_symbol,
+const dividendEntrySelectColumns = `
+       id, depot_id, security_id, pay_date, ex_date, security_name, security_isin, security_wkn, security_symbol,
        quantity, dividend_per_unit_amount, dividend_per_unit_currency, fx_rate_label, fx_rate, gross_amount, gross_currency,
        payout_amount, payout_currency, withholding_tax_country_code, withholding_tax_percent, withholding_tax_amount,
        withholding_tax_currency, withholding_tax_amount_credit, withholding_tax_amount_credit_currency,
        withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, foreign_fees_amount, foreign_fees_currency,
-       note, calc_gross_amount_base, calc_after_withholding_amount_base, created_at, updated_at
-  FROM dividend_entries
- WHERE `+column+` = ?
- ORDER BY pay_date ASC, id ASC;
-`, value)
-	if err != nil {
-		return nil, fmt.Errorf("list dividend entries by %s: %w", column, err)
-	}
-	defer func() { _ = rows.Close() }()
+       note, calc_gross_amount_base, calc_after_withholding_amount_base, created_at, updated_at`
 
-	out := make([]DividendEntry, 0)
-	for rows.Next() {
-		entry, err := scanDividendEntry(rows)
-		if err != nil {
-			return nil, fmt.Errorf("scan dividend entry: %w", err)
-		}
-		out = append(out, *entry)
+func scanDividendEntry(row *sql.Row) (DividendEntry, error) {
+	var e DividendEntry
+	if err := row.Scan(
+		&e.ID,
+		&e.DepotID,
+		&e.SecurityID,
+		&e.PayDate,
+		&e.ExDate,
+		&e.SecurityName,
+		&e.SecurityISIN,
+		&e.SecurityWKN,
+		&e.SecuritySymbol,
+		&e.Quantity,
+		&e.DividendPerUnitAmount,
+		&e.DividendPerUnitCurrency,
+		&e.FXRateLabel,
+		&e.FXRate,
+		&e.GrossAmount,
+		&e.GrossCurrency,
+		&e.PayoutAmount,
+		&e.PayoutCurrency,
+		&e.WithholdingTaxCountryCode,
+		&e.WithholdingTaxPercent,
+		&e.WithholdingTaxAmount,
+		&e.WithholdingTaxCurrency,
+		&e.WithholdingTaxAmountCredit,
+		&e.WithholdingTaxAmountCreditCurrency,
+		&e.WithholdingTaxAmountRefundable,
+		&e.WithholdingTaxAmountRefundableCurrency,
+		&e.ForeignFeesAmount,
+		&e.ForeignFeesCurrency,
+		&e.Note,
+		&e.CalcGrossAmountBase,
+		&e.CalcAfterWithholdingAmountBase,
+		&e.CreatedAt,
+		&e.UpdatedAt,
+	); err != nil {
+		return DividendEntry{}, err
 	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate dividend entries by %s: %w", column, err)
-	}
-
-	return out, nil
+	return e, nil
 }
 
-// listDividendEntriesByColumnAndDateRange performs its package-specific operation.
-func (d *DB) listDividendEntriesByColumnAndDateRange(column string, value int64, fromDate, toDate string) ([]DividendEntry, error) {
-	if d == nil || d.SQL == nil {
-		return nil, fmt.Errorf("db not initialized")
+func scanDividendEntryRow(rows *sql.Rows) (DividendEntry, error) {
+	var e DividendEntry
+	if err := rows.Scan(
+		&e.ID,
+		&e.DepotID,
+		&e.SecurityID,
+		&e.PayDate,
+		&e.ExDate,
+		&e.SecurityName,
+		&e.SecurityISIN,
+		&e.SecurityWKN,
+		&e.SecuritySymbol,
+		&e.Quantity,
+		&e.DividendPerUnitAmount,
+		&e.DividendPerUnitCurrency,
+		&e.FXRateLabel,
+		&e.FXRate,
+		&e.GrossAmount,
+		&e.GrossCurrency,
+		&e.PayoutAmount,
+		&e.PayoutCurrency,
+		&e.WithholdingTaxCountryCode,
+		&e.WithholdingTaxPercent,
+		&e.WithholdingTaxAmount,
+		&e.WithholdingTaxCurrency,
+		&e.WithholdingTaxAmountCredit,
+		&e.WithholdingTaxAmountCreditCurrency,
+		&e.WithholdingTaxAmountRefundable,
+		&e.WithholdingTaxAmountRefundableCurrency,
+		&e.ForeignFeesAmount,
+		&e.ForeignFeesCurrency,
+		&e.Note,
+		&e.CalcGrossAmountBase,
+		&e.CalcAfterWithholdingAmountBase,
+		&e.CreatedAt,
+		&e.UpdatedAt,
+	); err != nil {
+		return DividendEntry{}, err
 	}
-	if value <= 0 {
-		return nil, fmt.Errorf("%s must be > 0", column)
-	}
+	return e, nil
+}
 
+func mapDividendEntrySortColumn(sortBy string) (string, error) {
+	switch strings.TrimSpace(sortBy) {
+	case "", "PayDate":
+		return "de.pay_date", nil
+	case "ExDate":
+		return "de.ex_date", nil
+	case "SecurityName":
+		return "de.security_name", nil
+	default:
+		return "", fmt.Errorf("invalid sort")
+	}
+}
+
+func appendDividendEntryDateFilters(query string, args []any, fromDate, toDate string) (string, []any) {
 	fromDate = strings.TrimSpace(fromDate)
 	toDate = strings.TrimSpace(toDate)
 
-	rows, err := d.SQL.Query(`
-SELECT id, user_id, depot_id, security_id, pay_date, ex_date, security_name, security_isin, security_wkn, security_symbol,
-       quantity, dividend_per_unit_amount, dividend_per_unit_currency, fx_rate_label, fx_rate, gross_amount, gross_currency,
-       payout_amount, payout_currency, withholding_tax_country_code, withholding_tax_percent, withholding_tax_amount,
-       withholding_tax_currency, withholding_tax_amount_credit, withholding_tax_amount_credit_currency,
-       withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, foreign_fees_amount, foreign_fees_currency,
-       note, calc_gross_amount_base, calc_after_withholding_amount_base, created_at, updated_at
-  FROM dividend_entries
- WHERE `+column+` = ?
-   AND pay_date >= ?
-   AND pay_date <= ?
- ORDER BY pay_date ASC, id ASC;
-`, value, fromDate, toDate)
+	if fromDate != "" {
+		query += "   AND de.pay_date >= ?\n"
+		args = append(args, fromDate)
+	}
+	if toDate != "" {
+		query += "   AND de.pay_date <= ?\n"
+		args = append(args, toDate)
+	}
+
+	return query, args
+}
+
+func (d *DB) listDividendEntriesByColumnPage(column string, value int64, limit, offset int, sortBy, fromDate, toDate string) ([]DividendEntry, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	if value <= 0 {
+		return nil, fmt.Errorf("%s must be > 0", column)
+	}
+	if limit < 0 {
+		return nil, fmt.Errorf("limit must be >= 0")
+	}
+	if offset < 0 {
+		return nil, fmt.Errorf("offset must be >= 0")
+	}
+
+	sortColumn, err := mapDividendEntrySortColumn(sortBy)
 	if err != nil {
-		return nil, fmt.Errorf("list dividend entries by %s and date range: %w", column, err)
+		return nil, fmt.Errorf("list dividend entries page by %s: %w", column, err)
+	}
+
+	query := `
+SELECT` + dividendEntrySelectColumns + `
+  FROM dividend_entries de
+ WHERE de.` + column + ` = ?
+`
+	args := []any{value}
+	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query += " ORDER BY " + sortColumn + " ASC, de.id ASC\n"
+	query += " LIMIT ? OFFSET ?;"
+	args = append(args, limit, offset)
+
+	rows, err := d.SQL.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list dividend entries page by %s: %w", column, err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	out := make([]DividendEntry, 0)
 	for rows.Next() {
-		entry, err := scanDividendEntry(rows)
+		e, err := scanDividendEntryRow(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan dividend entry by date range: %w", err)
+			return nil, fmt.Errorf("scan dividend entry page by %s: %w", column, err)
 		}
-		out = append(out, *entry)
+		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate dividend entries by %s and date range: %w", column, err)
+		return nil, fmt.Errorf("iterate dividend entries page by %s: %w", column, err)
 	}
 
 	return out, nil
+}
+
+func (d *DB) countDividendEntriesByColumn(column string, value int64, fromDate, toDate string) (int64, error) {
+	if d == nil || d.SQL == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	if value <= 0 {
+		return 0, fmt.Errorf("%s must be > 0", column)
+	}
+
+	query := `
+SELECT COUNT(*)
+  FROM dividend_entries de
+ WHERE de.` + column + ` = ?
+`
+	args := []any{value}
+	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query += ";"
+
+	var count int64
+	err := d.SQL.QueryRow(query, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count dividend entries by %s: %w", column, err)
+	}
+	return count, nil
 }
 
 // CreateDividendEntry creates a new record.
@@ -257,14 +319,14 @@ func (d *DB) CreateDividendEntry(entry *DividendEntry) error {
 
 	res, err := d.SQL.Exec(`
 INSERT INTO dividend_entries (
-  user_id, depot_id, security_id, pay_date, ex_date, security_name, security_isin, security_wkn, security_symbol,
+  depot_id, security_id, pay_date, ex_date, security_name, security_isin, security_wkn, security_symbol,
   quantity, dividend_per_unit_amount, dividend_per_unit_currency, fx_rate_label, fx_rate, gross_amount, gross_currency,
   payout_amount, payout_currency, withholding_tax_country_code, withholding_tax_percent, withholding_tax_amount,
   withholding_tax_currency, withholding_tax_amount_credit, withholding_tax_amount_credit_currency,
   withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, foreign_fees_amount, foreign_fees_currency,
   note, calc_gross_amount_base, calc_after_withholding_amount_base, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-`, normalized.UserID, normalized.DepotID, normalized.SecurityID, normalized.PayDate, normalized.ExDate, normalized.SecurityName, normalized.SecurityISIN, normalized.SecurityWKN, normalized.SecuritySymbol, normalized.Quantity, normalized.DividendPerUnitAmount, normalized.DividendPerUnitCurrency, normalized.FXRateLabel, normalized.FXRate, normalized.GrossAmount, normalized.GrossCurrency, normalized.PayoutAmount, normalized.PayoutCurrency, normalized.WithholdingTaxCountryCode, normalized.WithholdingTaxPercent, normalized.WithholdingTaxAmount, normalized.WithholdingTaxCurrency, normalized.WithholdingTaxAmountCredit, normalized.WithholdingTaxAmountCreditCurrency, normalized.WithholdingTaxAmountRefundable, normalized.WithholdingTaxAmountRefundableCurrency, normalized.ForeignFeesAmount, normalized.ForeignFeesCurrency, normalized.Note, normalized.CalcGrossAmountBase, normalized.CalcAfterWithholdingAmountBase, normalized.CreatedAt, normalized.UpdatedAt)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+`, normalized.DepotID, normalized.SecurityID, normalized.PayDate, normalized.ExDate, normalized.SecurityName, normalized.SecurityISIN, normalized.SecurityWKN, normalized.SecuritySymbol, normalized.Quantity, normalized.DividendPerUnitAmount, normalized.DividendPerUnitCurrency, normalized.FXRateLabel, normalized.FXRate, normalized.GrossAmount, normalized.GrossCurrency, normalized.PayoutAmount, normalized.PayoutCurrency, normalized.WithholdingTaxCountryCode, normalized.WithholdingTaxPercent, normalized.WithholdingTaxAmount, normalized.WithholdingTaxCurrency, normalized.WithholdingTaxAmountCredit, normalized.WithholdingTaxAmountCreditCurrency, normalized.WithholdingTaxAmountRefundable, normalized.WithholdingTaxAmountRefundableCurrency, normalized.ForeignFeesAmount, normalized.ForeignFeesCurrency, normalized.Note, normalized.CalcGrossAmountBase, normalized.CalcAfterWithholdingAmountBase, normalized.CreatedAt, normalized.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create dividend entry: %w", err)
 	}
@@ -298,8 +360,7 @@ func (d *DB) UpdateDividendEntry(entry *DividendEntry) error {
 
 	_, err = d.SQL.Exec(`
 UPDATE dividend_entries
-   SET user_id = ?,
-       depot_id = ?,
+   SET depot_id = ?,
        security_id = ?,
        pay_date = ?,
        ex_date = ?,
@@ -331,7 +392,7 @@ UPDATE dividend_entries
        calc_after_withholding_amount_base = ?,
        updated_at = ?
  WHERE id = ?;
-`, normalized.UserID, normalized.DepotID, normalized.SecurityID, normalized.PayDate, normalized.ExDate, normalized.SecurityName, normalized.SecurityISIN, normalized.SecurityWKN, normalized.SecuritySymbol, normalized.Quantity, normalized.DividendPerUnitAmount, normalized.DividendPerUnitCurrency, normalized.FXRateLabel, normalized.FXRate, normalized.GrossAmount, normalized.GrossCurrency, normalized.PayoutAmount, normalized.PayoutCurrency, normalized.WithholdingTaxCountryCode, normalized.WithholdingTaxPercent, normalized.WithholdingTaxAmount, normalized.WithholdingTaxCurrency, normalized.WithholdingTaxAmountCredit, normalized.WithholdingTaxAmountCreditCurrency, normalized.WithholdingTaxAmountRefundable, normalized.WithholdingTaxAmountRefundableCurrency, normalized.ForeignFeesAmount, normalized.ForeignFeesCurrency, normalized.Note, normalized.CalcGrossAmountBase, normalized.CalcAfterWithholdingAmountBase, normalized.UpdatedAt, normalized.ID)
+`, normalized.DepotID, normalized.SecurityID, normalized.PayDate, normalized.ExDate, normalized.SecurityName, normalized.SecurityISIN, normalized.SecurityWKN, normalized.SecuritySymbol, normalized.Quantity, normalized.DividendPerUnitAmount, normalized.DividendPerUnitCurrency, normalized.FXRateLabel, normalized.FXRate, normalized.GrossAmount, normalized.GrossCurrency, normalized.PayoutAmount, normalized.PayoutCurrency, normalized.WithholdingTaxCountryCode, normalized.WithholdingTaxPercent, normalized.WithholdingTaxAmount, normalized.WithholdingTaxCurrency, normalized.WithholdingTaxAmountCredit, normalized.WithholdingTaxAmountCreditCurrency, normalized.WithholdingTaxAmountRefundable, normalized.WithholdingTaxAmountRefundableCurrency, normalized.ForeignFeesAmount, normalized.ForeignFeesCurrency, normalized.Note, normalized.CalcGrossAmountBase, normalized.CalcAfterWithholdingAmountBase, normalized.UpdatedAt, normalized.ID)
 	if err != nil {
 		return fmt.Errorf("update dividend entry: %w", err)
 	}
@@ -341,21 +402,16 @@ UPDATE dividend_entries
 }
 
 // GetDividendEntryByID returns data for the requested input.
-func (d *DB) GetDividendEntryByID(id int64) (*DividendEntry, error) {
+func (d *DB) GetDividendEntryByID(id int64) (DividendEntry, bool, error) {
 	if d == nil || d.SQL == nil {
-		return nil, fmt.Errorf("db not initialized")
+		return DividendEntry{}, false, fmt.Errorf("db not initialized")
 	}
 	if id <= 0 {
-		return nil, fmt.Errorf("id must be > 0")
+		return DividendEntry{}, false, fmt.Errorf("id must be > 0")
 	}
 
 	row := d.SQL.QueryRow(`
-SELECT id, user_id, depot_id, security_id, pay_date, ex_date, security_name, security_isin, security_wkn, security_symbol,
-       quantity, dividend_per_unit_amount, dividend_per_unit_currency, fx_rate_label, fx_rate, gross_amount, gross_currency,
-       payout_amount, payout_currency, withholding_tax_country_code, withholding_tax_percent, withholding_tax_amount,
-       withholding_tax_currency, withholding_tax_amount_credit, withholding_tax_amount_credit_currency,
-       withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, foreign_fees_amount, foreign_fees_currency,
-       note, calc_gross_amount_base, calc_after_withholding_amount_base, created_at, updated_at
+SELECT`+dividendEntrySelectColumns+`
   FROM dividend_entries
  WHERE id = ?
  LIMIT 1;
@@ -363,13 +419,13 @@ SELECT id, user_id, depot_id, security_id, pay_date, ex_date, security_name, sec
 
 	entry, err := scanDividendEntry(row)
 	if err == sql.ErrNoRows {
-		return nil, nil
+		return DividendEntry{}, false, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get dividend entry by id: %w", err)
+		return DividendEntry{}, false, fmt.Errorf("get dividend entry by id: %w", err)
 	}
 
-	return entry, nil
+	return entry, true, nil
 }
 
 // DeleteDividendEntry deletes the record by ID.
@@ -395,12 +451,7 @@ func (d *DB) ListAllDividendEntries() ([]DividendEntry, error) {
 	}
 
 	rows, err := d.SQL.Query(`
-SELECT id, user_id, depot_id, security_id, pay_date, ex_date, security_name, security_isin, security_wkn, security_symbol,
-       quantity, dividend_per_unit_amount, dividend_per_unit_currency, fx_rate_label, fx_rate, gross_amount, gross_currency,
-       payout_amount, payout_currency, withholding_tax_country_code, withholding_tax_percent, withholding_tax_amount,
-       withholding_tax_currency, withholding_tax_amount_credit, withholding_tax_amount_credit_currency,
-       withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, foreign_fees_amount, foreign_fees_currency,
-       note, calc_gross_amount_base, calc_after_withholding_amount_base, created_at, updated_at
+SELECT` + dividendEntrySelectColumns + `
   FROM dividend_entries
  ORDER BY pay_date ASC, id ASC;
 `)
@@ -411,11 +462,11 @@ SELECT id, user_id, depot_id, security_id, pay_date, ex_date, security_name, sec
 
 	out := make([]DividendEntry, 0)
 	for rows.Next() {
-		entry, err := scanDividendEntry(rows)
+		e, err := scanDividendEntryRow(rows)
 		if err != nil {
 			return nil, fmt.Errorf("scan dividend entry for export: %w", err)
 		}
-		out = append(out, *entry)
+		out = append(out, e)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate dividend entries for export: %w", err)
@@ -424,32 +475,143 @@ SELECT id, user_id, depot_id, security_id, pay_date, ex_date, security_name, sec
 	return out, nil
 }
 
-// ListDividendEntriesByUserID returns a list for the requested filter.
-func (d *DB) ListDividendEntriesByUserID(userID int64) ([]DividendEntry, error) {
-	return d.listDividendEntriesByColumn("user_id", userID)
+// ListDividendEntriesByUserMembership returns a filtered and paginated list of dividend
+// entries for depots the given user has direct depot membership on.
+func appendDividendEntryRolesFilter(query string, args []any, roles []string) (string, []any) {
+	if len(roles) == 0 {
+		return query, args
+	}
+
+	query += "   AND m.role IN (" + sqlPlaceholders(len(roles)) + ")\n"
+	for _, role := range roles {
+		args = append(args, role)
+	}
+
+	return query, args
 }
 
-// ListDividendEntriesByDepotID returns a list for the requested filter.
-func (d *DB) ListDividendEntriesByDepotID(depotID int64) ([]DividendEntry, error) {
-	return d.listDividendEntriesByColumn("depot_id", depotID)
+// ListAccessibleDividendEntriesByUser returns a filtered and paginated list of dividend
+// entries accessible to the user for the requested action scope.
+func (d *DB) ListAccessibleDividendEntriesByUser(userID int64, all bool, roles []string, limit, offset int, sortBy, fromDate, toDate string) ([]DividendEntry, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	if userID <= 0 {
+		return nil, fmt.Errorf("userID must be > 0")
+	}
+	if limit < 0 {
+		return nil, fmt.Errorf("limit must be >= 0")
+	}
+	if offset < 0 {
+		return nil, fmt.Errorf("offset must be >= 0")
+	}
+
+	sortColumn, err := mapDividendEntrySortColumn(sortBy)
+	if err != nil {
+		return nil, fmt.Errorf("list accessible dividend entries by user: %w", err)
+	}
+
+	query := ""
+	args := make([]any, 0, 2+len(roles))
+	if all {
+		query = `
+SELECT` + dividendEntrySelectColumns + `
+  FROM dividend_entries de
+ WHERE 1 = 1
+`
+	} else {
+		query = `
+SELECT` + dividendEntrySelectColumns + `
+  FROM dividend_entries de
+  JOIN memberships m ON m.entity_type = ? AND m.entity_id = de.depot_id
+ WHERE m.user_id = ?
+`
+		args = append(args, EntityTypeDepot, userID)
+		query, args = appendDividendEntryRolesFilter(query, args, roles)
+	}
+
+	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query += " ORDER BY " + sortColumn + " ASC, de.id ASC\n"
+	query += " LIMIT ? OFFSET ?;"
+	args = append(args, limit, offset)
+
+	rows, err := d.SQL.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list accessible dividend entries by user: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]DividendEntry, 0)
+	for rows.Next() {
+		e, err := scanDividendEntryRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan accessible dividend entry by user: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate accessible dividend entries by user: %w", err)
+	}
+
+	return out, nil
 }
 
-// ListDividendEntriesBySecurityID returns a list for the requested filter.
-func (d *DB) ListDividendEntriesBySecurityID(securityID int64) ([]DividendEntry, error) {
-	return d.listDividendEntriesByColumn("security_id", securityID)
+// CountAccessibleDividendEntriesByUser returns the total number of filtered dividend
+// entries accessible to the user for the requested action scope.
+func (d *DB) CountAccessibleDividendEntriesByUser(userID int64, all bool, roles []string, fromDate, toDate string) (int64, error) {
+	if d == nil || d.SQL == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	if userID <= 0 {
+		return 0, fmt.Errorf("userID must be > 0")
+	}
+
+	query := ""
+	args := make([]any, 0, 2+len(roles))
+	if all {
+		query = `
+SELECT COUNT(*)
+  FROM dividend_entries de
+ WHERE 1 = 1
+`
+	} else {
+		query = `
+SELECT COUNT(*)
+  FROM dividend_entries de
+  JOIN memberships m ON m.entity_type = ? AND m.entity_id = de.depot_id
+ WHERE m.user_id = ?
+`
+		args = append(args, EntityTypeDepot, userID)
+		query, args = appendDividendEntryRolesFilter(query, args, roles)
+	}
+
+	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query += ";"
+
+	var count int64
+	err := d.SQL.QueryRow(query, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count accessible dividend entries by user: %w", err)
+	}
+	return count, nil
 }
 
-// ListDividendEntriesByUserIDAndDateRange returns a list for the requested filter.
-func (d *DB) ListDividendEntriesByUserIDAndDateRange(userID int64, fromDate, toDate string) ([]DividendEntry, error) {
-	return d.listDividendEntriesByColumnAndDateRange("user_id", userID, fromDate, toDate)
+// ListDividendEntriesByDepotID returns a filtered and paginated list for the requested filter.
+func (d *DB) ListDividendEntriesByDepotID(depotID int64, limit, offset int, sortBy, fromDate, toDate string) ([]DividendEntry, error) {
+	return d.listDividendEntriesByColumnPage("depot_id", depotID, limit, offset, sortBy, fromDate, toDate)
 }
 
-// ListDividendEntriesByDepotIDAndDateRange returns a list for the requested filter.
-func (d *DB) ListDividendEntriesByDepotIDAndDateRange(depotID int64, fromDate, toDate string) ([]DividendEntry, error) {
-	return d.listDividendEntriesByColumnAndDateRange("depot_id", depotID, fromDate, toDate)
+// CountDividendEntriesByDepotID returns the total number of filtered records for the requested filter.
+func (d *DB) CountDividendEntriesByDepotID(depotID int64, fromDate, toDate string) (int64, error) {
+	return d.countDividendEntriesByColumn("depot_id", depotID, fromDate, toDate)
 }
 
-// ListDividendEntriesBySecurityIDAndDateRange returns a list for the requested filter.
-func (d *DB) ListDividendEntriesBySecurityIDAndDateRange(securityID int64, fromDate, toDate string) ([]DividendEntry, error) {
-	return d.listDividendEntriesByColumnAndDateRange("security_id", securityID, fromDate, toDate)
+// ListDividendEntriesBySecurityID returns a filtered and paginated list for the requested filter.
+func (d *DB) ListDividendEntriesBySecurityID(securityID int64, limit, offset int, sortBy, fromDate, toDate string) ([]DividendEntry, error) {
+	return d.listDividendEntriesByColumnPage("security_id", securityID, limit, offset, sortBy, fromDate, toDate)
+}
+
+// CountDividendEntriesBySecurityID returns the total number of filtered records for the requested filter.
+func (d *DB) CountDividendEntriesBySecurityID(securityID int64, fromDate, toDate string) (int64, error) {
+	return d.countDividendEntriesByColumn("security_id", securityID, fromDate, toDate)
 }

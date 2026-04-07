@@ -11,6 +11,7 @@ import (
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/cors"
 	"github.com/geschke/schrevind/pkg/db"
+	"github.com/geschke/schrevind/pkg/grrt"
 	"github.com/geschke/schrevind/pkg/users"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
@@ -20,14 +21,16 @@ type UsersController struct {
 	DB          *db.DB
 	Store       sessions.Store
 	SessionName string
+	G           *grrt.Grrt
 }
 
 // NewUsersController constructs and returns a new instance.
-func NewUsersController(database *db.DB, store sessions.Store, sessionName string) *UsersController {
+func NewUsersController(database *db.DB, store sessions.Store, sessionName string, g *grrt.Grrt) *UsersController {
 	return &UsersController{
 		DB:          database,
 		Store:       store,
 		SessionName: sessionName,
+		G:           g,
 	}
 }
 
@@ -38,12 +41,14 @@ func (ct UsersController) Options(c *gin.Context) {
 }
 
 type updateUserRequest struct {
+	GroupID   int64   `json:"GroupID"`
 	Email     *string `json:"Email"`
 	FirstName *string `json:"FirstName"`
 	LastName  *string `json:"LastName"`
 }
 
 type addUserRequest struct {
+	GroupID         int64  `json:"GroupID"`
 	Email           string `json:"Email"`
 	Password        string `json:"Password"`
 	PasswordConfirm string `json:"PasswordConfirm"`
@@ -52,8 +57,13 @@ type addUserRequest struct {
 }
 
 type updatePasswordRequest struct {
+	GroupID           int64  `json:"GroupID"`
 	Password          string `json:"Password"`
 	PasswordDuplicate string `json:"PasswordDuplicate"`
+}
+
+type deleteUserRequest struct {
+	GroupID int64 `json:"GroupID"`
 }
 
 // ensureAuthorized performs its package-specific operation.
@@ -97,6 +107,23 @@ func (ct UsersController) currentSessionUserID(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
+// canManageUser checks whether sessionUserID may perform action on users in groupID.
+// System-admin is checked first; if not, group-admin of the given group is checked.
+// Returns (allowed, error).
+func (ct UsersController) canManageUser(sessionUserID int64, action string, groupID int64) (bool, error) {
+	ok, err := ct.G.Can(sessionUserID, action)
+	if err != nil {
+		return false, err
+	}
+	if ok {
+		return true, nil
+	}
+	if groupID <= 0 {
+		return false, nil
+	}
+	return ct.G.CanDo(sessionUserID, db.EntityTypeGroup, action, groupID)
+}
+
 // parseUserID performs its package-specific operation.
 func parseUserID(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
@@ -112,8 +139,23 @@ func (ct UsersController) GetList(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
-
 	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	allowed, err := ct.G.Can(sessionUserID, "user:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return
 	}
 
@@ -132,6 +174,7 @@ func (ct UsersController) GetList(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
+		"count":   int64(len(items)),
 		"items":   items,
 	})
 }
@@ -141,7 +184,6 @@ func (ct UsersController) GetByID(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
-
 	if !ct.ensureAuthorized(c) {
 		return
 	}
@@ -149,6 +191,25 @@ func (ct UsersController) GetByID(c *gin.Context) {
 	id, ok := parseUserID(c)
 	if !ok {
 		return
+	}
+
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	// A user may always fetch their own profile.
+	if id != sessionUserID {
+		allowed, err := ct.G.Can(sessionUserID, "user:list")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -186,11 +247,31 @@ func (ct UsersController) PostUpdate(c *gin.Context) {
 		return
 	}
 
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
 	var req updateUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
 	}
+
+	// A user may always edit their own profile; otherwise requires user:edit permission.
+	if id != sessionUserID {
+		allowed, err := ct.canManageUser(sessionUserID, "user:edit", req.GroupID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
+	}
+
 	if req.Email == nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "MISSING_EMAIL"})
 		return
@@ -282,10 +363,29 @@ func (ct UsersController) PostUpdatePassword(c *gin.Context) {
 		return
 	}
 
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
 	var req updatePasswordRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
+	}
+
+	// A user may always change their own password; otherwise requires user:edit permission.
+	if id != sessionUserID {
+		allowed, err := ct.canManageUser(sessionUserID, "user:edit", req.GroupID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
 	}
 
 	password := strings.TrimSpace(req.Password)
@@ -355,9 +455,30 @@ func (ct UsersController) PostAdd(c *gin.Context) {
 		return
 	}
 
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
 	var req addUserRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+
+	if req.GroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	allowed, err := ct.canManageUser(sessionUserID, "user:create", req.GroupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return
 	}
 
@@ -415,6 +536,15 @@ func (ct UsersController) PostAdd(c *gin.Context) {
 		return
 	}
 
+	// Do not auto-assign to the system group — that is a privilege context,
+	// not an organisational one. The system admin must add the user explicitly.
+	if req.GroupID != db.SystemGroupID {
+		if _, err := ct.DB.AddUserToGroup(req.GroupID, newID); err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+	}
+
 	item, found, err := ct.DB.GetUserByID(ctx, newID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
@@ -447,9 +577,30 @@ func (ct UsersController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	sessionUserID, hasSessionUserID := ct.currentSessionUserID(c)
-	if hasSessionUserID && sessionUserID == id {
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	if sessionUserID == id {
 		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "CANNOT_DELETE_OWN_ACCOUNT"})
+		return
+	}
+
+	var req deleteUserRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+
+	allowed, err := ct.canManageUser(sessionUserID, "user:delete", req.GroupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return
 	}
 

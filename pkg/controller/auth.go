@@ -140,6 +140,12 @@ func (ct AuthController) PostLogin(c *gin.Context) {
 		return
 	}
 
+	groups, err := ct.DB.ListGroupsWithRoleByUserID(u.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
 	c.JSON(http.StatusOK, gin.H{
 		"success":   true,
 		"id":        strconv.FormatInt(u.ID, 10),
@@ -147,6 +153,7 @@ func (ct AuthController) PostLogin(c *gin.Context) {
 		"firstname": u.FirstName,
 		"lastname":  u.LastName,
 		"session":   "cookie",
+		"groups":    groups,
 	})
 }
 
@@ -245,7 +252,14 @@ func (ct AuthController) GetMe(c *gin.Context) {
 	}
 
 	u.Password = ""
-	c.JSON(http.StatusOK, gin.H{"success": true, "item": u})
+
+	groups, err := ct.DB.ListGroupsWithRoleByUserID(u.ID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"success": true, "item": u, "groups": groups})
 }
 
 // parseSameSite performs its package-specific operation.

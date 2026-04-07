@@ -13,6 +13,7 @@ import (
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/controller"
 	"github.com/geschke/schrevind/pkg/db"
+	"github.com/geschke/schrevind/pkg/grrt"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
@@ -33,6 +34,9 @@ func Start(database *db.DB) error {
 			sessionName = "schrevind_session"
 		}
 		store := sessions.NewCookieStore([]byte(config.Cfg.WebUI.SessionKey))
+
+		g := grrt.New(database)
+
 		auth := controller.NewAuthController(database, store, sessionName)
 		router.POST("/api/auth/login", auth.PostLogin)
 		router.OPTIONS("/api/auth/login", auth.OptionsLogin)
@@ -41,7 +45,7 @@ func Start(database *db.DB) error {
 		router.GET("/api/auth/me", auth.GetMe)
 		router.OPTIONS("/api/auth/me", auth.OptionsMe)
 
-		usersCtl := controller.NewUsersController(database, store, sessionName)
+		usersCtl := controller.NewUsersController(database, store, sessionName, g)
 		router.GET("/api/users/list", usersCtl.GetList)
 		router.OPTIONS("/api/users/list", usersCtl.Options)
 		router.POST("/api/users/add", usersCtl.PostAdd)
@@ -55,7 +59,7 @@ func Start(database *db.DB) error {
 		router.POST("/api/users/delete/:id", usersCtl.PostDelete)
 		router.OPTIONS("/api/users/delete/:id", usersCtl.Options)
 
-		depotsCtl := controller.NewDepotsController(database, store, sessionName)
+		depotsCtl := controller.NewDepotsController(database, store, sessionName, g)
 		router.GET("/api/depots/list", depotsCtl.GetList)
 		router.OPTIONS("/api/depots/list", depotsCtl.Options)
 		router.GET("/api/depots/:id", depotsCtl.GetByID)
@@ -66,6 +70,14 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/depots/update/:id", depotsCtl.Options)
 		router.POST("/api/depots/delete/:id", depotsCtl.PostDelete)
 		router.OPTIONS("/api/depots/delete/:id", depotsCtl.Options)
+		router.GET("/api/depots/:id/access", depotsCtl.GetAccess)
+		router.OPTIONS("/api/depots/:id/access", depotsCtl.Options)
+		router.POST("/api/depots/:id/access/add", depotsCtl.PostAccessAdd)
+		router.OPTIONS("/api/depots/:id/access/add", depotsCtl.Options)
+		router.POST("/api/depots/:id/access/remove", depotsCtl.PostAccessRemove)
+		router.OPTIONS("/api/depots/:id/access/remove", depotsCtl.Options)
+		router.POST("/api/depots/:id/access/change", depotsCtl.PostAccessChange)
+		router.OPTIONS("/api/depots/:id/access/change", depotsCtl.Options)
 
 		securitiesCtl := controller.NewSecuritiesController(database, store, sessionName)
 		router.GET("/api/securities/list", securitiesCtl.GetList)
@@ -115,13 +127,7 @@ func Start(database *db.DB) error {
 		router.GET("/api/exports/get/:filename", exportsCtl.GetFile)
 		router.OPTIONS("/api/exports/get/:filename", exportsCtl.Options)
 
-		dividendEntriesCtl := controller.NewDividendEntriesController(database, store, sessionName)
-		router.GET("/api/dividend-entries/by-user/:user_id/range", dividendEntriesCtl.GetListByUserAndRange)
-		router.OPTIONS("/api/dividend-entries/by-user/:user_id/range", dividendEntriesCtl.Options)
-		router.GET("/api/dividend-entries/by-depot/:depot_id/range", dividendEntriesCtl.GetListByDepotAndRange)
-		router.OPTIONS("/api/dividend-entries/by-depot/:depot_id/range", dividendEntriesCtl.Options)
-		router.GET("/api/dividend-entries/by-security/:security_id/range", dividendEntriesCtl.GetListBySecurityAndRange)
-		router.OPTIONS("/api/dividend-entries/by-security/:security_id/range", dividendEntriesCtl.Options)
+		dividendEntriesCtl := controller.NewDividendEntriesController(database, store, sessionName, g)
 		router.GET("/api/dividend-entries/by-user/:user_id", dividendEntriesCtl.GetListByUser)
 		router.OPTIONS("/api/dividend-entries/by-user/:user_id", dividendEntriesCtl.Options)
 		router.GET("/api/dividend-entries/by-depot/:depot_id", dividendEntriesCtl.GetListByDepot)
@@ -136,6 +142,26 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/dividend-entries/update/:id", dividendEntriesCtl.Options)
 		router.POST("/api/dividend-entries/delete/:id", dividendEntriesCtl.PostDelete)
 		router.OPTIONS("/api/dividend-entries/delete/:id", dividendEntriesCtl.Options)
+
+		groupsCtl := controller.NewGroupsController(database, store, sessionName, g)
+		router.GET("/api/groups/list", groupsCtl.GetList)
+		router.OPTIONS("/api/groups/list", groupsCtl.Options)
+		router.GET("/api/groups/:id", groupsCtl.GetByID)
+		router.OPTIONS("/api/groups/:id", groupsCtl.Options)
+		router.POST("/api/groups/add", groupsCtl.PostAdd)
+		router.OPTIONS("/api/groups/add", groupsCtl.Options)
+		router.POST("/api/groups/update/:id", groupsCtl.PostUpdate)
+		router.OPTIONS("/api/groups/update/:id", groupsCtl.Options)
+		router.POST("/api/groups/delete/:id", groupsCtl.PostDelete)
+		router.OPTIONS("/api/groups/delete/:id", groupsCtl.Options)
+		router.GET("/api/groups/:id/members", groupsCtl.GetMembers)
+		router.OPTIONS("/api/groups/:id/members", groupsCtl.Options)
+		router.POST("/api/groups/:id/members/add", groupsCtl.PostMemberAdd)
+		router.OPTIONS("/api/groups/:id/members/add", groupsCtl.Options)
+		router.POST("/api/groups/:id/members/remove", groupsCtl.PostMemberRemove)
+		router.OPTIONS("/api/groups/:id/members/remove", groupsCtl.Options)
+		router.GET("/api/groups/:id/depots", groupsCtl.GetDepots)
+		router.OPTIONS("/api/groups/:id/depots", groupsCtl.Options)
 	}
 
 	// public routes
