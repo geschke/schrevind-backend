@@ -102,12 +102,12 @@ func isValidSecurityStatusFilter(status string) bool {
 }
 
 // parseSecurityListParams performs its package-specific operation.
-func parseSecurityListParams(c *gin.Context) (int, int, string, string, error) {
+func parseSecurityListParams(c *gin.Context) (int, int, string, string, string, error) {
 	limit := 10
 	if v := strings.TrimSpace(c.Query("limit")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > 100 {
-			return 0, 0, "", "", errors.New("INVALID_LIMIT")
+			return 0, 0, "", "", "", errors.New("INVALID_LIMIT")
 		}
 		limit = n
 	}
@@ -116,7 +116,7 @@ func parseSecurityListParams(c *gin.Context) (int, int, string, string, error) {
 	if v := strings.TrimSpace(c.Query("offset")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			return 0, 0, "", "", errors.New("INVALID_OFFSET")
+			return 0, 0, "", "", "", errors.New("INVALID_OFFSET")
 		}
 		offset = n
 	}
@@ -124,19 +124,33 @@ func parseSecurityListParams(c *gin.Context) (int, int, string, string, error) {
 	sortBy := "Name"
 	if v := strings.TrimSpace(c.Query("sort")); v != "" {
 		switch v {
-		case "Name", "ISIN", "WKN", "Symbol":
+		case "ID", "Name", "ISIN", "WKN", "Symbol", "Status", "CreatedAt", "UpdatedAt":
 			sortBy = v
 		default:
-			return 0, 0, "", "", errors.New("INVALID_SORT")
+			return 0, 0, "", "", "", errors.New("INVALID_SORT")
+		}
+	}
+
+	direction := "ASC"
+	if v := strings.ToLower(strings.TrimSpace(c.Query("direction"))); v != "" {
+		switch v {
+		case "asc":
+			direction = "ASC"
+		case "desc":
+			direction = "DESC"
+		case "none":
+			direction = "ASC"
+		default:
+			return 0, 0, "", "", "", errors.New("INVALID_DIRECTION")
 		}
 	}
 
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
 	if !isValidSecurityStatusFilter(status) {
-		return 0, 0, "", "", errors.New("INVALID_STATUS_FILTER")
+		return 0, 0, "", "", "", errors.New("INVALID_STATUS_FILTER")
 	}
 
-	return limit, offset, sortBy, status, nil
+	return limit, offset, sortBy, direction, status, nil
 }
 
 // normalizeSecurityPayload performs its package-specific operation.
@@ -169,13 +183,13 @@ func (ct SecuritiesController) GetList(c *gin.Context) {
 		return
 	}
 
-	limit, offset, sortBy, status, err := parseSecurityListParams(c)
+	limit, offset, sortBy, direction, status, err := parseSecurityListParams(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 
-	items, err := ct.DB.ListSecurities(limit, offset, sortBy, status)
+	items, err := ct.DB.ListSecurities(limit, offset, sortBy, direction, status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -190,6 +204,28 @@ func (ct SecuritiesController) GetList(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"count":   count,
+		"items":   items,
+	})
+}
+
+// GET /api/securities/list-all
+func (ct SecuritiesController) GetListAll(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	items, err := ct.DB.ListAllSecuritiesLite()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"count":   len(items),
 		"items":   items,
 	})
 }

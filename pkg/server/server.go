@@ -82,6 +82,8 @@ func Start(database *db.DB) error {
 		securitiesCtl := controller.NewSecuritiesController(database, store, sessionName)
 		router.GET("/api/securities/list", securitiesCtl.GetList)
 		router.OPTIONS("/api/securities/list", securitiesCtl.Options)
+		router.GET("/api/securities/list-all", securitiesCtl.GetListAll)
+		router.OPTIONS("/api/securities/list-all", securitiesCtl.Options)
 		router.GET("/api/securities/:id", securitiesCtl.GetByID)
 		router.OPTIONS("/api/securities/:id", securitiesCtl.Options)
 		router.POST("/api/securities/add", securitiesCtl.PostAdd)

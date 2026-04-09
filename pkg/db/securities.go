@@ -68,16 +68,35 @@ func scanSecurity(scanner interface {
 // mapSecuritySortColumn maps allowed API sort values to SQL column names.
 func mapSecuritySortColumn(sortBy string) (string, error) {
 	switch strings.TrimSpace(sortBy) {
+	case "ID":
+		return "id", nil
 	case "", "Name":
-		return "name", nil
+		return "name COLLATE NOCASE", nil
 	case "ISIN":
-		return "isin", nil
+		return "isin COLLATE NOCASE", nil
 	case "WKN":
-		return "wkn", nil
+		return "wkn COLLATE NOCASE", nil
 	case "Symbol":
-		return "symbol", nil
+		return "symbol COLLATE NOCASE", nil
+	case "Status":
+		return "status COLLATE NOCASE", nil
+	case "CreatedAt":
+		return "created_at", nil
+	case "UpdatedAt":
+		return "updated_at", nil
 	default:
 		return "", fmt.Errorf("invalid sort")
+	}
+}
+
+func normalizeSecuritySortDirection(direction string) (string, error) {
+	switch strings.ToUpper(strings.TrimSpace(direction)) {
+	case "", "ASC":
+		return "ASC", nil
+	case "DESC":
+		return "DESC", nil
+	default:
+		return "", fmt.Errorf("invalid direction")
 	}
 }
 
@@ -206,7 +225,7 @@ SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
 }
 
 // ListSecurities returns a filtered and paginated list of securities.
-func (d *DB) ListSecurities(limit, offset int, sortBy, status string) ([]Security, error) {
+func (d *DB) ListSecurities(limit, offset int, sortBy, direction, status string) ([]Security, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
@@ -218,6 +237,10 @@ func (d *DB) ListSecurities(limit, offset int, sortBy, status string) ([]Securit
 	}
 
 	sortColumn, err := mapSecuritySortColumn(sortBy)
+	if err != nil {
+		return nil, fmt.Errorf("list securities page: %w", err)
+	}
+	sortDirection, err := normalizeSecuritySortDirection(direction)
 	if err != nil {
 		return nil, fmt.Errorf("list securities page: %w", err)
 	}
@@ -235,7 +258,7 @@ SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
 		args = append(args, status)
 	}
 
-	query += " ORDER BY " + sortColumn + " ASC, id ASC\n"
+	query += " ORDER BY " + sortColumn + " " + sortDirection + ", id " + sortDirection + "\n"
 	query += " LIMIT ? OFFSET ?;"
 	args = append(args, limit, offset)
 
@@ -255,6 +278,42 @@ SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate securities page: %w", err)
+	}
+
+	return out, nil
+}
+
+// ListAllSecuritiesLite returns all securities with only the fields needed for compact list UIs.
+func (d *DB) ListAllSecuritiesLite() ([]Security, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+
+	rows, err := d.SQL.Query(`
+SELECT id, name, isin, wkn
+  FROM securities
+ ORDER BY name COLLATE NOCASE ASC, id ASC;
+`)
+	if err != nil {
+		return nil, fmt.Errorf("list all securities lite: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]Security, 0)
+	for rows.Next() {
+		var security Security
+		if err := rows.Scan(
+			&security.ID,
+			&security.Name,
+			&security.ISIN,
+			&security.WKN,
+		); err != nil {
+			return nil, fmt.Errorf("scan security lite: %w", err)
+		}
+		out = append(out, security)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate securities lite: %w", err)
 	}
 
 	return out, nil
