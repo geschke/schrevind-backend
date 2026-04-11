@@ -9,6 +9,7 @@ import (
 	"github.com/geschke/schrevind/pkg/cors"
 	"github.com/geschke/schrevind/pkg/db"
 	"github.com/geschke/schrevind/pkg/grrt"
+	"github.com/geschke/schrevind/pkg/validate"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
 )
@@ -119,6 +120,15 @@ type updateDividendEntryRequest struct {
 	ForeignFeesCurrency *string `json:"ForeignFeesCurrency"`
 
 	Note *string `json:"Note"`
+}
+
+type fieldErrors map[string]string
+
+type decimalFieldRule struct {
+	FieldName     string
+	Required      bool
+	AllowNegative bool
+	Value         *string
 }
 
 // ensureAuthorized performs its package-specific operation.
@@ -250,8 +260,45 @@ func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, str
 	return limit, offset, sortBy, direction, fromDate, toDate, true
 }
 
+func addRequiredStringFieldError(errors fieldErrors, fieldName, value, message string) {
+	if strings.TrimSpace(value) == "" {
+		errors[fieldName] = message
+	}
+}
+
+func validateDecimalFields(errors fieldErrors, rules []decimalFieldRule) {
+	for _, rule := range rules {
+		if rule.Value == nil {
+			continue
+		}
+
+		value := strings.TrimSpace(*rule.Value)
+		if value == "" && !rule.Required {
+			*rule.Value = ""
+			continue
+		}
+
+		normalized, err := validate.NormalizeDecimalString(value, rule.AllowNegative)
+		if err != nil {
+			errors[rule.FieldName] = err.Error()
+			*rule.Value = value
+			continue
+		}
+
+		*rule.Value = normalized
+	}
+}
+
+func writeFieldErrors(c *gin.Context, errors fieldErrors) {
+	c.JSON(http.StatusBadRequest, gin.H{
+		"success":     false,
+		"message":     "VALIDATION_ERROR",
+		"fieldErrors": errors,
+	})
+}
+
 // normalizeDividendEntryPayload performs its package-specific operation.
-func normalizeDividendEntryPayload(entry db.DividendEntry) (db.DividendEntry, string) {
+func normalizeDividendEntryPayload(entry db.DividendEntry) (db.DividendEntry, fieldErrors) {
 	entry.PayDate = strings.TrimSpace(entry.PayDate)
 	entry.ExDate = strings.TrimSpace(entry.ExDate)
 	entry.SecurityName = strings.TrimSpace(entry.SecurityName)
@@ -279,47 +326,37 @@ func normalizeDividendEntryPayload(entry db.DividendEntry) (db.DividendEntry, st
 	entry.ForeignFeesCurrency = strings.TrimSpace(entry.ForeignFeesCurrency)
 	entry.Note = strings.TrimSpace(entry.Note)
 
+	errors := fieldErrors{}
+
 	if entry.DepotID <= 0 {
-		return entry, "INVALID_DEPOT_ID"
+		errors["DepotID"] = "INVALID_DEPOT_ID"
 	}
 	if entry.SecurityID <= 0 {
-		return entry, "INVALID_SECURITY_ID"
-	}
-	if entry.PayDate == "" {
-		return entry, "MISSING_PAY_DATE"
-	}
-	if entry.ExDate == "" {
-		return entry, "MISSING_EX_DATE"
-	}
-	if entry.SecurityName == "" {
-		return entry, "MISSING_SECURITY_NAME"
-	}
-	if entry.SecurityISIN == "" {
-		return entry, "MISSING_SECURITY_ISIN"
-	}
-	if entry.Quantity == "" {
-		return entry, "MISSING_QUANTITY"
-	}
-	if entry.DividendPerUnitAmount == "" {
-		return entry, "MISSING_DIVIDEND_PER_UNIT_AMOUNT"
-	}
-	if entry.DividendPerUnitCurrency == "" {
-		return entry, "MISSING_DIVIDEND_PER_UNIT_CURRENCY"
-	}
-	if entry.GrossAmount == "" {
-		return entry, "MISSING_GROSS_AMOUNT"
-	}
-	if entry.GrossCurrency == "" {
-		return entry, "MISSING_GROSS_CURRENCY"
-	}
-	if entry.PayoutAmount == "" {
-		return entry, "MISSING_PAYOUT_AMOUNT"
-	}
-	if entry.PayoutCurrency == "" {
-		return entry, "MISSING_PAYOUT_CURRENCY"
+		errors["SecurityID"] = "INVALID_SECURITY_ID"
 	}
 
-	return entry, ""
+	addRequiredStringFieldError(errors, "PayDate", entry.PayDate, "MISSING_PAY_DATE")
+	addRequiredStringFieldError(errors, "ExDate", entry.ExDate, "MISSING_EX_DATE")
+	addRequiredStringFieldError(errors, "SecurityName", entry.SecurityName, "MISSING_SECURITY_NAME")
+	addRequiredStringFieldError(errors, "SecurityISIN", entry.SecurityISIN, "MISSING_SECURITY_ISIN")
+	addRequiredStringFieldError(errors, "DividendPerUnitCurrency", entry.DividendPerUnitCurrency, "MISSING_DIVIDEND_PER_UNIT_CURRENCY")
+	addRequiredStringFieldError(errors, "GrossCurrency", entry.GrossCurrency, "MISSING_GROSS_CURRENCY")
+	addRequiredStringFieldError(errors, "PayoutCurrency", entry.PayoutCurrency, "MISSING_PAYOUT_CURRENCY")
+
+	validateDecimalFields(errors, []decimalFieldRule{
+		{FieldName: "Quantity", Required: true, Value: &entry.Quantity},
+		{FieldName: "DividendPerUnitAmount", Required: true, Value: &entry.DividendPerUnitAmount},
+		{FieldName: "FXRate", Value: &entry.FXRate},
+		{FieldName: "GrossAmount", Required: true, Value: &entry.GrossAmount},
+		{FieldName: "PayoutAmount", Required: true, Value: &entry.PayoutAmount},
+		{FieldName: "WithholdingTaxPercent", Value: &entry.WithholdingTaxPercent},
+		{FieldName: "WithholdingTaxAmount", Value: &entry.WithholdingTaxAmount},
+		{FieldName: "WithholdingTaxAmountCredit", Value: &entry.WithholdingTaxAmountCredit},
+		{FieldName: "WithholdingTaxAmountRefundable", Value: &entry.WithholdingTaxAmountRefundable},
+		{FieldName: "ForeignFeesAmount", Value: &entry.ForeignFeesAmount},
+	})
+
+	return entry, errors
 }
 
 // prepareCalculatedDividendFields performs its package-specific operation.
@@ -552,17 +589,7 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:create", req.DepotID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
-		return
-	}
-
-	entry, message := normalizeDividendEntryPayload(db.DividendEntry{
+	entry, fieldErrors := normalizeDividendEntryPayload(db.DividendEntry{
 		DepotID:                                req.DepotID,
 		SecurityID:                             req.SecurityID,
 		PayDate:                                req.PayDate,
@@ -592,8 +619,18 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		ForeignFeesCurrency:                    req.ForeignFeesCurrency,
 		Note:                                   req.Note,
 	})
-	if message != "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": message})
+	if len(fieldErrors) > 0 {
+		writeFieldErrors(c, fieldErrors)
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:create", entry.DepotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
 		return
 	}
 
@@ -749,9 +786,9 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 		updated.Note = *req.Note
 	}
 
-	updated, message := normalizeDividendEntryPayload(updated)
-	if message != "" {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": message})
+	updated, fieldErrors := normalizeDividendEntryPayload(updated)
+	if len(fieldErrors) > 0 {
+		writeFieldErrors(c, fieldErrors)
 		return
 	}
 
