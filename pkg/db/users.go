@@ -1,4 +1,4 @@
-﻿package db
+package db
 
 import (
 	"context"
@@ -14,9 +14,18 @@ type User struct {
 	FirstName string `json:"FirstName,omitempty"`
 	LastName  string `json:"LastName,omitempty"`
 	Email     string `json:"Email,omitempty"`
+	Locale    string `json:"Locale,omitempty"`
 	Status    string `json:"Status,omitempty"`
 	CreatedAt int64  `json:"CreatedAt,omitempty"`
 	UpdatedAt int64  `json:"UpdatedAt,omitempty"`
+}
+
+func normalizeUserLocale(locale string) string {
+	locale = strings.TrimSpace(locale)
+	if locale == "" {
+		return "en-US"
+	}
+	return locale
 }
 
 // normalizeUser performs its package-specific operation.
@@ -25,6 +34,7 @@ func normalizeUser(u User) (User, error) {
 	u.FirstName = strings.TrimSpace(u.FirstName)
 	u.LastName = strings.TrimSpace(u.LastName)
 	u.Email = strings.ToLower(strings.TrimSpace(u.Email))
+	u.Locale = normalizeUserLocale(u.Locale)
 
 	if u.Email == "" {
 		return User{}, fmt.Errorf("email is required")
@@ -56,9 +66,9 @@ func (d *DB) CreateUser(ctx context.Context, u User) (int64, error) {
 
 	res, err := d.SQL.ExecContext(ctx, `
 INSERT INTO users (
-  password, firstname, lastname, email, status, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?);
-`, u.Password, u.FirstName, u.LastName, u.Email, "active", u.CreatedAt, u.UpdatedAt)
+  password, firstname, lastname, email, locale, status, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+`, u.Password, u.FirstName, u.LastName, u.Email, u.Locale, "active", u.CreatedAt, u.UpdatedAt)
 	if err != nil {
 		return 0, fmt.Errorf("create user: %w", err)
 	}
@@ -79,6 +89,7 @@ func scanUser(row *sql.Row) (User, error) {
 		&u.FirstName,
 		&u.LastName,
 		&u.Email,
+		&u.Locale,
 		&u.Status,
 		&u.CreatedAt,
 		&u.UpdatedAt,
@@ -98,7 +109,7 @@ func (d *DB) GetUserByID(ctx context.Context, id int64) (User, bool, error) {
 	}
 
 	row := d.SQL.QueryRowContext(ctx, `
-SELECT id, password, firstname, lastname, email, status, created_at, updated_at
+SELECT id, password, firstname, lastname, email, locale, status, created_at, updated_at
   FROM users
  WHERE id = ?
  LIMIT 1;
@@ -127,7 +138,7 @@ func (d *DB) GetUserByEmail(ctx context.Context, email string) (User, bool, erro
 	}
 
 	row := d.SQL.QueryRowContext(ctx, `
-SELECT id, password, firstname, lastname, email, status, created_at, updated_at
+SELECT id, password, firstname, lastname, email, locale, status, created_at, updated_at
   FROM users
  WHERE email = ?
  LIMIT 1;
@@ -158,6 +169,7 @@ func (d *DB) UpdateUser(ctx context.Context, u User) (bool, error) {
 	u.FirstName = strings.TrimSpace(u.FirstName)
 	u.LastName = strings.TrimSpace(u.LastName)
 	u.Email = strings.ToLower(strings.TrimSpace(u.Email))
+	u.Locale = strings.TrimSpace(u.Locale)
 	u.Status = strings.ToLower(u.Status)
 	now := time.Now().Unix()
 
@@ -177,6 +189,10 @@ func (d *DB) UpdateUser(ctx context.Context, u User) (bool, error) {
 	if u.Password != "" {
 		setParts = append(setParts, "password = ?")
 		args = append(args, u.Password)
+	}
+	if u.Locale != "" {
+		setParts = append(setParts, "locale = ?")
+		args = append(args, normalizeUserLocale(u.Locale))
 	}
 
 	args = append(args, u.ID)
@@ -242,7 +258,7 @@ func (d *DB) ListUsers(ctx context.Context) ([]User, error) {
 	}
 
 	rows, err := d.SQL.QueryContext(ctx, `
-SELECT id, firstname, lastname, email, status, created_at, updated_at
+SELECT id, firstname, lastname, email, locale, status, created_at, updated_at
   FROM users
  ORDER BY id ASC;
 `)
@@ -259,6 +275,7 @@ SELECT id, firstname, lastname, email, status, created_at, updated_at
 			&u.FirstName,
 			&u.LastName,
 			&u.Email,
+			&u.Locale,
 			&u.Status,
 			&u.CreatedAt,
 			&u.UpdatedAt,
@@ -282,7 +299,7 @@ func (d *DB) ListAllUsersForExport(ctx context.Context) ([]User, error) {
 	}
 
 	rows, err := d.SQL.QueryContext(ctx, `
-SELECT id, password, firstname, lastname, email, status, created_at, updated_at
+SELECT id, password, firstname, lastname, email, locale, status, created_at, updated_at
   FROM users
  ORDER BY id ASC;
 `)
@@ -300,6 +317,7 @@ SELECT id, password, firstname, lastname, email, status, created_at, updated_at
 			&u.FirstName,
 			&u.LastName,
 			&u.Email,
+			&u.Locale,
 			&u.Status,
 			&u.CreatedAt,
 			&u.UpdatedAt,

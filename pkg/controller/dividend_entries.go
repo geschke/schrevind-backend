@@ -10,6 +10,7 @@ import (
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/cors"
 	"github.com/geschke/schrevind/pkg/db"
+	displayformat "github.com/geschke/schrevind/pkg/format"
 	"github.com/geschke/schrevind/pkg/grrt"
 	"github.com/geschke/schrevind/pkg/validate"
 	"github.com/gin-gonic/gin"
@@ -199,6 +200,23 @@ func (ct DividendEntriesController) currentSessionUserID(c *gin.Context) (int64,
 		return 0, false
 	}
 	return id, true
+}
+
+func (ct DividendEntriesController) currentSessionUserLocale(c *gin.Context) (string, bool, error) {
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		return "", false, nil
+	}
+
+	u, found, err := ct.DB.GetUserByID(c.Request.Context(), userID)
+	if err != nil {
+		return "", false, err
+	}
+	if !found {
+		return "", false, nil
+	}
+
+	return normalizeUserLocaleForController(u.Locale), true, nil
 }
 
 // parseDividendEntryID parses and validates the dividend-entry ID path parameter.
@@ -632,6 +650,29 @@ func formatCalculatedDecimal(value decimal.Decimal, decimalPlaces int32) string 
 	return value.Round(decimalPlaces).StringFixed(decimalPlaces)
 }
 
+func formatDividendEntryForLocale(entry db.DividendEntry, locale string) db.DividendEntry {
+	entry.Quantity = displayformat.DecimalForLocale(entry.Quantity, locale)
+	entry.DividendPerUnitAmount = displayformat.DecimalForLocale(entry.DividendPerUnitAmount, locale)
+	entry.FXRate = displayformat.DecimalForLocale(entry.FXRate, locale)
+	entry.GrossAmount = displayformat.DecimalForLocale(entry.GrossAmount, locale)
+	entry.PayoutAmount = displayformat.DecimalForLocale(entry.PayoutAmount, locale)
+	entry.WithholdingTaxPercent = displayformat.DecimalForLocale(entry.WithholdingTaxPercent, locale)
+	entry.WithholdingTaxAmount = displayformat.DecimalForLocale(entry.WithholdingTaxAmount, locale)
+	entry.WithholdingTaxAmountCredit = displayformat.DecimalForLocale(entry.WithholdingTaxAmountCredit, locale)
+	entry.WithholdingTaxAmountRefundable = displayformat.DecimalForLocale(entry.WithholdingTaxAmountRefundable, locale)
+	entry.ForeignFeesAmount = displayformat.DecimalForLocale(entry.ForeignFeesAmount, locale)
+	entry.CalcGrossAmountBase = displayformat.DecimalForLocale(entry.CalcGrossAmountBase, locale)
+	entry.CalcAfterWithholdingAmountBase = displayformat.DecimalForLocale(entry.CalcAfterWithholdingAmountBase, locale)
+	return entry
+}
+
+func formatDividendEntriesForLocale(items []db.DividendEntry, locale string) []db.DividendEntry {
+	for i := range items {
+		items[i] = formatDividendEntryForLocale(items[i], locale)
+	}
+	return items
+}
+
 // GetByID handles GET /api/dividend-entries/:id and returns one authorized entry.
 func (ct DividendEntriesController) GetByID(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
@@ -671,6 +712,17 @@ func (ct DividendEntriesController) GetByID(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
 		return
 	}
+
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	item = formatDividendEntryForLocale(item, locale)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -736,6 +788,17 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 		return
 	}
 
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	items = formatDividendEntriesForLocale(items, locale)
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"count":   count,
@@ -790,6 +853,17 @@ func (ct DividendEntriesController) GetListByDepot(c *gin.Context) {
 		return
 	}
 
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	items = formatDividendEntriesForLocale(items, locale)
+
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"count":   count,
@@ -803,6 +877,16 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		return
 	}
 	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
 
@@ -827,6 +911,8 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
+
+	items = formatDividendEntriesForLocale(items, locale)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

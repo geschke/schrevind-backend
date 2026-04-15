@@ -120,6 +120,7 @@ func (ct AuthController) PostLogin(c *gin.Context) {
 	sess.Values["email"] = u.Email
 	sess.Values["firstname"] = u.FirstName
 	sess.Values["lastname"] = u.LastName
+	sess.Values["locale"] = u.Locale
 
 	maxAgeDays := config.Cfg.WebUI.CookieMaxAgeDays
 	if maxAgeDays <= 0 {
@@ -152,6 +153,7 @@ func (ct AuthController) PostLogin(c *gin.Context) {
 		"email":     u.Email,
 		"firstname": u.FirstName,
 		"lastname":  u.LastName,
+		"locale":    u.Locale,
 		"session":   "cookie",
 		"groups":    groups,
 	})

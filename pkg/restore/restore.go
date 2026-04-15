@@ -99,9 +99,9 @@ func Run(database *db.DB, doc *export.ExportDoc) error {
 	// 1. Insert users.
 	for _, u := range doc.Data.Users {
 		if _, err := tx.Exec(`
-INSERT INTO users (id, password, firstname, lastname, email, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-`, u.ID, u.Password, u.FirstName, u.LastName, u.Email, u.Status, u.CreatedAt, u.UpdatedAt); err != nil {
+INSERT INTO users (id, password, firstname, lastname, email, locale, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+`, u.ID, u.Password, u.FirstName, u.LastName, u.Email, u.Locale, u.Status, u.CreatedAt, u.UpdatedAt); err != nil {
 			return fmt.Errorf("IMPORT_FAILED: insert user id=%d: %w", u.ID, err)
 		}
 	}

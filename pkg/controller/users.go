@@ -45,6 +45,7 @@ type updateUserRequest struct {
 	Email     *string `json:"Email"`
 	FirstName *string `json:"FirstName"`
 	LastName  *string `json:"LastName"`
+	Locale    *string `json:"Locale"`
 }
 
 type addUserRequest struct {
@@ -54,6 +55,7 @@ type addUserRequest struct {
 	PasswordConfirm string `json:"PasswordConfirm"`
 	FirstName       string `json:"FirstName"`
 	LastName        string `json:"LastName"`
+	Locale          string `json:"Locale"`
 }
 
 type updatePasswordRequest struct {
@@ -318,6 +320,9 @@ func (ct UsersController) PostUpdate(c *gin.Context) {
 	if req.LastName != nil {
 		upd.LastName = strings.TrimSpace(*req.LastName)
 	}
+	if req.Locale != nil {
+		upd.Locale = normalizeUserLocaleForController(*req.Locale)
+	}
 	if nextEmail != currentEmail {
 		upd.Email = nextEmail
 	}
@@ -487,6 +492,7 @@ func (ct UsersController) PostAdd(c *gin.Context) {
 	passwordConfirm := strings.TrimSpace(req.PasswordConfirm)
 	firstName := strings.TrimSpace(req.FirstName)
 	lastName := strings.TrimSpace(req.LastName)
+	locale := normalizeUserLocaleForController(req.Locale)
 
 	if email == "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "MISSING_EMAIL"})
@@ -530,6 +536,7 @@ func (ct UsersController) PostAdd(c *gin.Context) {
 		Password:  hash,
 		FirstName: firstName,
 		LastName:  lastName,
+		Locale:    locale,
 	})
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
