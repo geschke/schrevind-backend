@@ -5,6 +5,8 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/cors"
 	"github.com/geschke/schrevind/pkg/db"
@@ -21,7 +23,7 @@ type DividendEntriesController struct {
 	G           *grrt.Grrt
 }
 
-// NewDividendEntriesController constructs and returns a new instance.
+// NewDividendEntriesController creates a controller for dividend-entry HTTP handlers.
 func NewDividendEntriesController(database *db.DB, store sessions.Store, sessionName string, g *grrt.Grrt) *DividendEntriesController {
 	return &DividendEntriesController{
 		DB:          database,
@@ -31,7 +33,7 @@ func NewDividendEntriesController(database *db.DB, store sessions.Store, session
 	}
 }
 
-// Options handles the CORS preflight request.
+// Options handles CORS preflight requests for dividend-entry routes.
 func (ct DividendEntriesController) Options(c *gin.Context) {
 	_ = cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins)
 }
@@ -122,6 +124,22 @@ type updateDividendEntryRequest struct {
 	Note *string `json:"Note"`
 }
 
+const (
+	errCurrencyRequired      = "ERR_CURRENCY_REQUIRED"
+	errCurrencyInvalidFormat = "ERR_CURRENCY_INVALID_FORMAT"
+	errCurrencyUnknown       = "ERR_CURRENCY_UNKNOWN"
+
+	errFXRateLabelRequired        = "ERR_FX_RATE_LABEL_REQUIRED"
+	errFXRateLabelInvalidFormat   = "ERR_FX_RATE_LABEL_INVALID_FORMAT"
+	errFXRateLabelUnknownCurrency = "ERR_FX_RATE_LABEL_UNKNOWN_CURRENCY"
+	errFXRatePairMismatch         = "ERR_FX_RATE_PAIR_MISMATCH"
+	errFXRateZero                 = "ERR_FX_RATE_ZERO"
+
+	errDepotNotFound       = "ERR_DEPOT_NOT_FOUND"
+	errBaseCurrencyMissing = "ERR_BASE_CURRENCY_MISSING"
+	errCalculationFailed   = "ERR_CALCULATION_FAILED"
+)
+
 type fieldErrors map[string]string
 
 type decimalFieldRule struct {
@@ -131,7 +149,18 @@ type decimalFieldRule struct {
 	Value         *string
 }
 
-// ensureAuthorized performs its package-specific operation.
+type amountCurrencyPairRule struct {
+	AmountFieldName   string
+	CurrencyFieldName string
+	Amount            *string
+	Currency          *string
+}
+
+type baseAmount struct {
+	Value decimal.Decimal
+}
+
+// ensureAuthorized verifies database/session setup and requires an authenticated session.
 func (ct DividendEntriesController) ensureAuthorized(c *gin.Context) bool {
 	if ct.DB == nil || ct.DB.SQL == nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_NOT_INITIALIZED"})
@@ -155,7 +184,7 @@ func (ct DividendEntriesController) ensureAuthorized(c *gin.Context) bool {
 	return true
 }
 
-// currentSessionUserID performs its package-specific operation.
+// currentSessionUserID returns the authenticated user ID from the current session.
 func (ct DividendEntriesController) currentSessionUserID(c *gin.Context) (int64, bool) {
 	sess, _ := ct.Store.Get(c.Request, ct.SessionName)
 	if sess == nil {
@@ -172,7 +201,7 @@ func (ct DividendEntriesController) currentSessionUserID(c *gin.Context) (int64,
 	return id, true
 }
 
-// parseDividendEntryID performs its package-specific operation.
+// parseDividendEntryID parses and validates the dividend-entry ID path parameter.
 func parseDividendEntryID(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
 	if err != nil || id <= 0 {
@@ -182,7 +211,7 @@ func parseDividendEntryID(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
-// parseDepotIDParamForDividendEntries performs its package-specific operation.
+// parseDepotIDParamForDividendEntries parses and validates the depot_id path parameter.
 func parseDepotIDParamForDividendEntries(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("depot_id")), 10, 64)
 	if err != nil || id <= 0 {
@@ -192,7 +221,7 @@ func parseDepotIDParamForDividendEntries(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
-// parseSecurityIDParam performs its package-specific operation.
+// parseSecurityIDParam parses and validates the security_id path parameter.
 func parseSecurityIDParam(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("security_id")), 10, 64)
 	if err != nil || id <= 0 {
@@ -202,7 +231,7 @@ func parseSecurityIDParam(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
-// parseDividendEntryListParams performs its package-specific operation.
+// parseDividendEntryListParams parses pagination, sorting, direction, and optional date filters.
 func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, string, string, bool) {
 	limit := 20
 	if v := strings.TrimSpace(c.Query("limit")); v != "" {
@@ -260,12 +289,14 @@ func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, str
 	return limit, offset, sortBy, direction, fromDate, toDate, true
 }
 
+// addRequiredStringFieldError adds a field error when a required string is empty after trimming.
 func addRequiredStringFieldError(errors fieldErrors, fieldName, value, message string) {
 	if strings.TrimSpace(value) == "" {
 		errors[fieldName] = message
 	}
 }
 
+// validateDecimalFields validates and normalizes decimal fields according to their field rules.
 func validateDecimalFields(errors fieldErrors, rules []decimalFieldRule) {
 	for _, rule := range rules {
 		if rule.Value == nil {
@@ -289,6 +320,7 @@ func validateDecimalFields(errors fieldErrors, rules []decimalFieldRule) {
 	}
 }
 
+// writeFieldErrors writes a validation-error response containing all collected field errors.
 func writeFieldErrors(c *gin.Context, errors fieldErrors) {
 	c.JSON(http.StatusBadRequest, gin.H{
 		"success":     false,
@@ -297,7 +329,146 @@ func writeFieldErrors(c *gin.Context, errors fieldErrors) {
 	})
 }
 
-// normalizeDividendEntryPayload performs its package-specific operation.
+// isStrictCurrencyCode reports whether value is exactly a three-letter uppercase currency code.
+func isStrictCurrencyCode(value string) bool {
+	if len(value) != 3 {
+		return false
+	}
+	for i := 0; i < len(value); i++ {
+		if value[i] < 'A' || value[i] > 'Z' {
+			return false
+		}
+	}
+	return true
+}
+
+// validateDividendEntryCurrencyPairs validates amount/currency pairs and known currency codes.
+func validateDividendEntryCurrencyPairs(database *db.DB, entry *db.DividendEntry, errors fieldErrors) error {
+	rules := []amountCurrencyPairRule{
+		{AmountFieldName: "DividendPerUnitAmount", CurrencyFieldName: "DividendPerUnitCurrency", Amount: &entry.DividendPerUnitAmount, Currency: &entry.DividendPerUnitCurrency},
+		{AmountFieldName: "GrossAmount", CurrencyFieldName: "GrossCurrency", Amount: &entry.GrossAmount, Currency: &entry.GrossCurrency},
+		{AmountFieldName: "PayoutAmount", CurrencyFieldName: "PayoutCurrency", Amount: &entry.PayoutAmount, Currency: &entry.PayoutCurrency},
+		{AmountFieldName: "WithholdingTaxAmount", CurrencyFieldName: "WithholdingTaxCurrency", Amount: &entry.WithholdingTaxAmount, Currency: &entry.WithholdingTaxCurrency},
+		{AmountFieldName: "WithholdingTaxAmountCredit", CurrencyFieldName: "WithholdingTaxAmountCreditCurrency", Amount: &entry.WithholdingTaxAmountCredit, Currency: &entry.WithholdingTaxAmountCreditCurrency},
+		{AmountFieldName: "WithholdingTaxAmountRefundable", CurrencyFieldName: "WithholdingTaxAmountRefundableCurrency", Amount: &entry.WithholdingTaxAmountRefundable, Currency: &entry.WithholdingTaxAmountRefundableCurrency},
+		{AmountFieldName: "ForeignFeesAmount", CurrencyFieldName: "ForeignFeesCurrency", Amount: &entry.ForeignFeesAmount, Currency: &entry.ForeignFeesCurrency},
+	}
+
+	knownCurrencies := make(map[string]bool)
+	for _, rule := range rules {
+		amount := strings.TrimSpace(*rule.Amount)
+		currency := strings.TrimSpace(*rule.Currency)
+		*rule.Amount = amount
+		*rule.Currency = currency
+
+		if amount == "" && currency == "" {
+			continue
+		}
+		if amount != "" && currency == "" {
+			errors[rule.CurrencyFieldName] = errCurrencyRequired
+			continue
+		}
+		if amount == "" && currency != "" {
+			if _, exists := errors[rule.AmountFieldName]; !exists {
+				errors[rule.AmountFieldName] = validate.ErrDecimalEmpty
+			}
+		}
+
+		if currency == "" {
+			continue
+		}
+		if !isStrictCurrencyCode(currency) {
+			errors[rule.CurrencyFieldName] = errCurrencyInvalidFormat
+			continue
+		}
+		if known, ok := knownCurrencies[currency]; ok {
+			if !known {
+				errors[rule.CurrencyFieldName] = errCurrencyUnknown
+			}
+			continue
+		}
+
+		item, err := database.GetCurrencyByCurrency(currency)
+		if err != nil {
+			return err
+		}
+		knownCurrencies[currency] = item != nil
+		if item == nil {
+			errors[rule.CurrencyFieldName] = errCurrencyUnknown
+		}
+	}
+
+	return nil
+}
+
+// validateDividendEntryFXRate validates FXRateLabel/FXRate and normalizes the default rate.
+func validateDividendEntryFXRate(database *db.DB, entry *db.DividendEntry, errors fieldErrors) error {
+	entry.FXRateLabel = strings.TrimSpace(entry.FXRateLabel)
+	entry.FXRate = strings.TrimSpace(entry.FXRate)
+
+	if entry.FXRateLabel == "" {
+		switch entry.FXRate {
+		case "", "0", "1":
+			entry.FXRate = "1"
+		default:
+			errors["FXRateLabel"] = errFXRateLabelRequired
+		}
+		return nil
+	}
+
+	normalizedFXRate, err := validate.NormalizeDecimalString(entry.FXRate, false)
+	if err != nil {
+		errors["FXRate"] = err.Error()
+	} else {
+		entry.FXRate = normalizedFXRate
+	}
+
+	left, right, ok := parseFXRateLabel(entry.FXRateLabel)
+	if !ok {
+		errors["FXRateLabel"] = errFXRateLabelInvalidFormat
+		return nil
+	}
+
+	if known, err := isKnownCurrency(database, left); err != nil {
+		return err
+	} else if !known {
+		errors["FXRateLabel"] = errFXRateLabelUnknownCurrency
+		return nil
+	}
+	if known, err := isKnownCurrency(database, right); err != nil {
+		return err
+	} else if !known {
+		errors["FXRateLabel"] = errFXRateLabelUnknownCurrency
+	}
+
+	return nil
+}
+
+// parseFXRateLabel splits labels of the form AAA/BBB into their two currency codes.
+func parseFXRateLabel(label string) (string, string, bool) {
+	if len(label) != 7 || label[3] != '/' {
+		return "", "", false
+	}
+
+	left := label[:3]
+	right := label[4:]
+	if !isStrictCurrencyCode(left) || !isStrictCurrencyCode(right) {
+		return "", "", false
+	}
+
+	return left, right, true
+}
+
+// isKnownCurrency reports whether a currency code exists in the currencies table.
+func isKnownCurrency(database *db.DB, currency string) (bool, error) {
+	item, err := database.GetCurrencyByCurrency(currency)
+	if err != nil {
+		return false, err
+	}
+	return item != nil, nil
+}
+
+// normalizeDividendEntryPayload trims strings, validates required fields, and normalizes decimals.
 func normalizeDividendEntryPayload(entry db.DividendEntry) (db.DividendEntry, fieldErrors) {
 	entry.PayDate = strings.TrimSpace(entry.PayDate)
 	entry.ExDate = strings.TrimSpace(entry.ExDate)
@@ -346,7 +517,6 @@ func normalizeDividendEntryPayload(entry db.DividendEntry) (db.DividendEntry, fi
 	validateDecimalFields(errors, []decimalFieldRule{
 		{FieldName: "Quantity", Required: true, Value: &entry.Quantity},
 		{FieldName: "DividendPerUnitAmount", Required: true, Value: &entry.DividendPerUnitAmount},
-		{FieldName: "FXRate", Value: &entry.FXRate},
 		{FieldName: "GrossAmount", Required: true, Value: &entry.GrossAmount},
 		{FieldName: "PayoutAmount", Required: true, Value: &entry.PayoutAmount},
 		{FieldName: "WithholdingTaxPercent", Value: &entry.WithholdingTaxPercent},
@@ -359,13 +529,110 @@ func normalizeDividendEntryPayload(entry db.DividendEntry) (db.DividendEntry, fi
 	return entry, errors
 }
 
-// prepareCalculatedDividendFields performs its package-specific operation.
-func prepareCalculatedDividendFields(entry db.DividendEntry) db.DividendEntry {
-	// Keep calculated fields backend-owned until dedicated calculation logic is added.
-	return entry
+// prepareCalculatedDividendFields calculates backend-owned base-currency amount fields.
+func prepareCalculatedDividendFields(database *db.DB, entry *db.DividendEntry, errors fieldErrors) error {
+	depot, found, err := database.GetDepotByID(entry.DepotID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		errors["DepotID"] = errDepotNotFound
+		return nil
+	}
+
+	baseCurrency := strings.TrimSpace(depot.BaseCurrency)
+	if baseCurrency == "" {
+		errors["DepotID"] = errBaseCurrencyMissing
+		return nil
+	}
+	if !isStrictCurrencyCode(baseCurrency) {
+		errors["DepotID"] = errCurrencyInvalidFormat
+		return nil
+	}
+	baseCurrencyItem, err := database.GetCurrencyByCurrency(baseCurrency)
+	if err != nil {
+		return err
+	}
+	if baseCurrencyItem == nil {
+		errors["DepotID"] = errCurrencyUnknown
+		return nil
+	}
+	decimalPlaces := int32(baseCurrencyItem.DecimalPlaces)
+
+	grossBase, ok := convertAmountToBase(entry.GrossAmount, entry.GrossCurrency, "GrossAmount", baseCurrency, entry.FXRateLabel, entry.FXRate, errors)
+	if !ok {
+		return nil
+	}
+	entry.CalcGrossAmountBase = formatCalculatedDecimal(grossBase.Value, decimalPlaces)
+
+	if strings.TrimSpace(entry.WithholdingTaxAmount) == "" {
+		entry.CalcAfterWithholdingAmountBase = entry.CalcGrossAmountBase
+		return nil
+	}
+
+	taxBase, ok := convertAmountToBase(entry.WithholdingTaxAmount, entry.WithholdingTaxCurrency, "WithholdingTaxAmount", baseCurrency, entry.FXRateLabel, entry.FXRate, errors)
+	if !ok {
+		return nil
+	}
+
+	entry.CalcAfterWithholdingAmountBase = formatCalculatedDecimal(grossBase.Value.Sub(taxBase.Value), decimalPlaces)
+	return nil
 }
 
-// GET /api/dividend-entries/:id
+// convertAmountToBase converts an amount into the depot base currency using the validated FX pair.
+func convertAmountToBase(amount, currency, amountFieldName, baseCurrency, fxRateLabel, fxRate string, errors fieldErrors) (baseAmount, bool) {
+	amountDecimal, err := decimal.NewFromString(amount)
+	if err != nil {
+		errors[amountFieldName] = errCalculationFailed
+		return baseAmount{}, false
+	}
+
+	if currency == baseCurrency {
+		return baseAmount{
+			Value: amountDecimal,
+		}, true
+	}
+
+	if strings.TrimSpace(fxRateLabel) == "" {
+		errors["FXRateLabel"] = errFXRateLabelRequired
+		return baseAmount{}, false
+	}
+
+	labelLeft, labelRight, ok := parseFXRateLabel(fxRateLabel)
+	if !ok {
+		errors["FXRateLabel"] = errFXRateLabelInvalidFormat
+		return baseAmount{}, false
+	}
+
+	rateDecimal, err := decimal.NewFromString(fxRate)
+	if err != nil {
+		errors["FXRate"] = errCalculationFailed
+		return baseAmount{}, false
+	}
+	if rateDecimal.IsZero() {
+		errors["FXRate"] = errFXRateZero
+		return baseAmount{}, false
+	}
+
+	switch {
+	case labelLeft == currency && labelRight == baseCurrency:
+		converted := amountDecimal.Mul(rateDecimal)
+		return baseAmount{Value: converted}, true
+	case labelLeft == baseCurrency && labelRight == currency:
+		converted := amountDecimal.Div(rateDecimal)
+		return baseAmount{Value: converted}, true
+	default:
+		errors["FXRateLabel"] = errFXRatePairMismatch
+		return baseAmount{}, false
+	}
+}
+
+// formatCalculatedDecimal rounds calculated values to the currency precision and formats them.
+func formatCalculatedDecimal(value decimal.Decimal, decimalPlaces int32) string {
+	return value.Round(decimalPlaces).StringFixed(decimalPlaces)
+}
+
+// GetByID handles GET /api/dividend-entries/:id and returns one authorized entry.
 func (ct DividendEntriesController) GetByID(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
@@ -411,7 +678,7 @@ func (ct DividendEntriesController) GetByID(c *gin.Context) {
 	})
 }
 
-// GET /api/dividend-entries/by-user/:user_id
+// GetListByUser handles GET /api/dividend-entries/by-user/:user_id for the current user.
 func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
@@ -476,7 +743,7 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 	})
 }
 
-// GET /api/dividend-entries/by-depot/:depot_id
+// GetListByDepot handles GET /api/dividend-entries/by-depot/:depot_id for an authorized depot.
 func (ct DividendEntriesController) GetListByDepot(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
@@ -530,7 +797,7 @@ func (ct DividendEntriesController) GetListByDepot(c *gin.Context) {
 	})
 }
 
-// GET /api/dividend-entries/by-security/:security_id
+// GetListBySecurity handles GET /api/dividend-entries/by-security/:security_id.
 func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
@@ -568,7 +835,7 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 	})
 }
 
-// POST /api/dividend-entries/add
+// PostAdd handles POST /api/dividend-entries/add and creates a validated dividend entry.
 func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
@@ -619,6 +886,14 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		ForeignFeesCurrency:                    req.ForeignFeesCurrency,
 		Note:                                   req.Note,
 	})
+	if err := validateDividendEntryCurrencyPairs(ct.DB, &entry, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if err := validateDividendEntryFXRate(ct.DB, &entry, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
 	if len(fieldErrors) > 0 {
 		writeFieldErrors(c, fieldErrors)
 		return
@@ -634,7 +909,14 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	entry = prepareCalculatedDividendFields(entry)
+	if err := prepareCalculatedDividendFields(ct.DB, &entry, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if len(fieldErrors) > 0 {
+		writeFieldErrors(c, fieldErrors)
+		return
+	}
 
 	if err := ct.DB.CreateDividendEntry(&entry); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
@@ -654,7 +936,7 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 	})
 }
 
-// POST /api/dividend-entries/update/:id
+// PostUpdate handles POST /api/dividend-entries/update/:id and updates a validated entry.
 func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
@@ -787,12 +1069,27 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 	}
 
 	updated, fieldErrors := normalizeDividendEntryPayload(updated)
+	if err := validateDividendEntryCurrencyPairs(ct.DB, &updated, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if err := validateDividendEntryFXRate(ct.DB, &updated, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
 	if len(fieldErrors) > 0 {
 		writeFieldErrors(c, fieldErrors)
 		return
 	}
 
-	updated = prepareCalculatedDividendFields(updated)
+	if err := prepareCalculatedDividendFields(ct.DB, &updated, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if len(fieldErrors) > 0 {
+		writeFieldErrors(c, fieldErrors)
+		return
+	}
 
 	if err := ct.DB.UpdateDividendEntry(&updated); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
@@ -812,7 +1109,7 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 	})
 }
 
-// POST /api/dividend-entries/delete/:id
+// PostDelete handles POST /api/dividend-entries/delete/:id for an authorized entry.
 func (ct DividendEntriesController) PostDelete(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return

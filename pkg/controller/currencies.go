@@ -34,15 +34,17 @@ func (ct CurrenciesController) Options(c *gin.Context) {
 }
 
 type addCurrencyRequest struct {
-	Currency string `json:"Currency"`
-	Name     string `json:"Name"`
-	Status   string `json:"Status"`
+	Currency      string `json:"Currency"`
+	Name          string `json:"Name"`
+	DecimalPlaces *int64 `json:"DecimalPlaces"`
+	Status        string `json:"Status"`
 }
 
 type updateCurrencyRequest struct {
-	Currency *string `json:"Currency"`
-	Name     *string `json:"Name"`
-	Status   *string `json:"Status"`
+	Currency      *string `json:"Currency"`
+	Name          *string `json:"Name"`
+	DecimalPlaces *int64  `json:"DecimalPlaces"`
+	Status        *string `json:"Status"`
 }
 
 // ensureAuthorized performs its package-specific operation.
@@ -120,7 +122,7 @@ func parseCurrencyListParams(c *gin.Context) (int, int, string, string, error) {
 	sortBy := "Currency"
 	if v := strings.TrimSpace(c.Query("sort")); v != "" {
 		switch v {
-		case "Currency", "Name":
+		case "Currency", "Name", "DecimalPlaces":
 			sortBy = v
 		default:
 			return 0, 0, "", "", errors.New("INVALID_SORT")
@@ -159,6 +161,9 @@ func normalizeCurrencyPayload(item db.Currency) (db.Currency, string) {
 	}
 	if item.Name == "" {
 		return item, "MISSING_NAME"
+	}
+	if item.DecimalPlaces < 0 {
+		return item, "INVALID_DECIMAL_PLACES"
 	}
 	if !isValidCurrencyStatus(item.Status) {
 		return item, "INVALID_STATUS"
@@ -246,10 +251,16 @@ func (ct CurrenciesController) PostAdd(c *gin.Context) {
 		return
 	}
 
+	decimalPlaces := int64(2)
+	if req.DecimalPlaces != nil {
+		decimalPlaces = *req.DecimalPlaces
+	}
+
 	item, message := normalizeCurrencyPayload(db.Currency{
-		Currency: req.Currency,
-		Name:     req.Name,
-		Status:   req.Status,
+		Currency:      req.Currency,
+		Name:          req.Name,
+		DecimalPlaces: decimalPlaces,
+		Status:        req.Status,
 	})
 	if message != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": message})
@@ -313,6 +324,9 @@ func (ct CurrenciesController) PostUpdate(c *gin.Context) {
 	}
 	if req.Name != nil {
 		updated.Name = *req.Name
+	}
+	if req.DecimalPlaces != nil {
+		updated.DecimalPlaces = *req.DecimalPlaces
 	}
 	if req.Status != nil {
 		updated.Status = *req.Status

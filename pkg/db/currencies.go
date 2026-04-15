@@ -14,12 +14,13 @@ const (
 )
 
 type Currency struct {
-	ID        int64  `json:"ID"`
-	Currency  string `json:"Currency,omitempty"`
-	Name      string `json:"Name,omitempty"`
-	Status    string `json:"Status,omitempty"`
-	CreatedAt int64  `json:"CreatedAt,omitempty"`
-	UpdatedAt int64  `json:"UpdatedAt,omitempty"`
+	ID            int64  `json:"ID"`
+	Currency      string `json:"Currency,omitempty"`
+	Name          string `json:"Name,omitempty"`
+	DecimalPlaces int64  `json:"DecimalPlaces"`
+	Status        string `json:"Status,omitempty"`
+	CreatedAt     int64  `json:"CreatedAt,omitempty"`
+	UpdatedAt     int64  `json:"UpdatedAt,omitempty"`
 }
 
 // normalizeCurrency performs its package-specific operation.
@@ -30,6 +31,9 @@ func normalizeCurrency(currency Currency) (Currency, error) {
 
 	if !isValidCurrencyCode(currency.Currency) {
 		return Currency{}, fmt.Errorf("currency must be a 3-letter uppercase code")
+	}
+	if currency.DecimalPlaces < 0 {
+		return Currency{}, fmt.Errorf("decimal_places must be >= 0")
 	}
 
 	now := time.Now().Unix()
@@ -63,6 +67,7 @@ func scanCurrency(scanner interface {
 		&currency.ID,
 		&currency.Currency,
 		&currency.Name,
+		&currency.DecimalPlaces,
 		&currency.Status,
 		&currency.CreatedAt,
 		&currency.UpdatedAt,
@@ -79,6 +84,8 @@ func mapCurrencySortColumn(sortBy string) (string, error) {
 		return "currency", nil
 	case "Name":
 		return "name", nil
+	case "DecimalPlaces":
+		return "decimal_places", nil
 	default:
 		return "", fmt.Errorf("invalid sort")
 	}
@@ -100,9 +107,9 @@ func (d *DB) CreateCurrency(currency *Currency) error {
 
 	res, err := d.SQL.Exec(`
 INSERT INTO currencies (
-  currency, name, status, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?);
-`, normalized.Currency, normalized.Name, normalized.Status, normalized.CreatedAt, normalized.UpdatedAt)
+  currency, name, decimal_places, status, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?);
+`, normalized.Currency, normalized.Name, normalized.DecimalPlaces, normalized.Status, normalized.CreatedAt, normalized.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create currency: %w", err)
 	}
@@ -138,10 +145,11 @@ func (d *DB) UpdateCurrency(currency *Currency) error {
 UPDATE currencies
    SET currency = ?,
        name = ?,
+       decimal_places = ?,
        status = ?,
        updated_at = ?
  WHERE id = ?;
-`, normalized.Currency, normalized.Name, normalized.Status, normalized.UpdatedAt, normalized.ID)
+`, normalized.Currency, normalized.Name, normalized.DecimalPlaces, normalized.Status, normalized.UpdatedAt, normalized.ID)
 	if err != nil {
 		return fmt.Errorf("update currency: %w", err)
 	}
@@ -160,7 +168,7 @@ func (d *DB) GetCurrencyByID(id int64) (*Currency, error) {
 	}
 
 	row := d.SQL.QueryRow(`
-SELECT id, currency, name, status, created_at, updated_at
+SELECT id, currency, name, decimal_places, status, created_at, updated_at
   FROM currencies
  WHERE id = ?
  LIMIT 1;
@@ -189,7 +197,7 @@ func (d *DB) GetCurrencyByCurrency(currencyCode string) (*Currency, error) {
 	}
 
 	row := d.SQL.QueryRow(`
-SELECT id, currency, name, status, created_at, updated_at
+SELECT id, currency, name, decimal_places, status, created_at, updated_at
   FROM currencies
  WHERE currency = ?
  LIMIT 1;
@@ -226,7 +234,7 @@ func (d *DB) ListCurrencies(limit, offset int, sortBy, status string) ([]Currenc
 	status = strings.TrimSpace(status)
 
 	query := `
-SELECT id, currency, name, status, created_at, updated_at
+SELECT id, currency, name, decimal_places, status, created_at, updated_at
   FROM currencies
 `
 	args := make([]any, 0, 3)
@@ -268,7 +276,7 @@ func (d *DB) ListAllCurrencies() ([]Currency, error) {
 	}
 
 	rows, err := d.SQL.Query(`
-SELECT id, currency, name, status, created_at, updated_at
+SELECT id, currency, name, decimal_places, status, created_at, updated_at
   FROM currencies
  ORDER BY id ASC;
 `)

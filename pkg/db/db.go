@@ -239,6 +239,7 @@ CREATE TABLE IF NOT EXISTS currencies (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   currency    TEXT NOT NULL DEFAULT '',
   name        TEXT NOT NULL DEFAULT '',
+  decimal_places INTEGER NOT NULL DEFAULT 2,
   status      TEXT NOT NULL DEFAULT 'active',
   created_at  INTEGER NOT NULL DEFAULT 0,
   updated_at  INTEGER NOT NULL DEFAULT 0
@@ -247,12 +248,12 @@ CREATE TABLE IF NOT EXISTS currencies (
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_currencies_currency ON currencies(currency);`,
 		`CREATE INDEX IF NOT EXISTS idx_currencies_status ON currencies(status);`,
 		`
-INSERT OR IGNORE INTO currencies (currency, name, created_at, updated_at)
-VALUES ('EUR', 'Euro', 0, 0);
+INSERT OR IGNORE INTO currencies (currency, name, decimal_places, created_at, updated_at)
+VALUES ('EUR', 'Euro', 2, 0, 0);
 `,
 		`
-INSERT OR IGNORE INTO currencies (currency, name, created_at, updated_at)
-VALUES ('USD', 'US Dollar', 0, 0);
+INSERT OR IGNORE INTO currencies (currency, name, decimal_places, created_at, updated_at)
+VALUES ('USD', 'US Dollar', 2, 0, 0);
 `,
 
 		`
