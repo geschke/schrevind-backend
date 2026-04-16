@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"strings"
@@ -48,6 +49,12 @@ type AnalysisColumn struct {
 type AnalysisRow map[string]string
 
 type dividendsByYearTotals struct {
+	Gross            decimal.Decimal
+	AfterWithholding decimal.Decimal
+	Net              decimal.Decimal
+}
+
+type dividendsByYearMonthTotals struct {
 	Gross            decimal.Decimal
 	AfterWithholding decimal.Decimal
 	Net              decimal.Decimal
@@ -229,6 +236,105 @@ func (ct AnalysesController) GetDividendsByYear(c *gin.Context) {
 	})
 }
 
+// GetDividendsByYearMonth handles GET /api/analyses/dividends-by-year-month.
+func (ct AnalysesController) GetDividendsByYearMonth(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, err := ct.DB.ListDepotsForActionScope(userID, scope.All, scope.Roles)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	baseCurrency, ok, currencies := uniqueDepotBaseCurrency(depots)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "ANALYSIS_MULTIPLE_BASE_CURRENCIES",
+			"currencies": currencies,
+		})
+		return
+	}
+
+	decimalPlaces := int32(2)
+	if baseCurrency != "" {
+		currency, err := ct.DB.GetCurrencyByCurrency(baseCurrency)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if currency != nil {
+			decimalPlaces = int32(currency.DecimalPlaces)
+		}
+	}
+
+	depotIDs := make([]int64, 0, len(depots))
+	for _, depot := range depots {
+		depotIDs = append(depotIDs, depot.ID)
+	}
+
+	sourceRows, err := ct.DB.ListDividendAnalysisMonthRowsByDepotIDs(depotIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	rows, ok := buildDividendsByYearMonthRows(sourceRows, decimalPlaces, locale)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "ANALYSIS_INVALID_DECIMAL_VALUE"})
+		return
+	}
+
+	c.JSON(http.StatusOK, AnalysisResponse{
+		Success: true,
+		Message: "ANALYSIS_OK",
+		Data: AnalysisData{
+			ID:       "dividends_by_year_month",
+			TitleKey: "analyses.dividends_by_year_month.title",
+			Type:     "table",
+			Columns:  dividendsByYearMonthColumns(baseCurrency),
+			Rows:     rows,
+		},
+	})
+}
+
 func uniqueDepotBaseCurrency(depots []db.Depot) (string, bool, []string) {
 	set := make(map[string]struct{})
 	for _, depot := range depots {
@@ -300,6 +406,78 @@ func buildDividendsByYearRows(sourceRows []db.DividendsByYearSourceRow, decimalP
 	return rows, true
 }
 
+func buildDividendsByYearMonthRows(sourceRows []db.DividendsByYearMonthSourceRow, decimalPlaces int32, locale string) ([]AnalysisRow, bool) {
+	yearTotals := make(map[string]dividendsByYearMonthTotals)
+	monthTotals := make(map[string]map[string]dividendsByYearMonthTotals)
+
+	for _, sourceRow := range sourceRows {
+		gross, err := decimal.NewFromString(sourceRow.Gross)
+		if err != nil {
+			return nil, false
+		}
+		afterWithholding, err := decimal.NewFromString(sourceRow.AfterWithholding)
+		if err != nil {
+			return nil, false
+		}
+		net, err := decimal.NewFromString(sourceRow.Net)
+		if err != nil {
+			return nil, false
+		}
+
+		yearTotal := yearTotals[sourceRow.Year]
+		yearTotal.Gross = yearTotal.Gross.Add(gross)
+		yearTotal.AfterWithholding = yearTotal.AfterWithholding.Add(afterWithholding)
+		yearTotal.Net = yearTotal.Net.Add(net)
+		yearTotals[sourceRow.Year] = yearTotal
+
+		if monthTotals[sourceRow.Year] == nil {
+			monthTotals[sourceRow.Year] = make(map[string]dividendsByYearMonthTotals)
+		}
+		monthTotal := monthTotals[sourceRow.Year][sourceRow.Month]
+		monthTotal.Gross = monthTotal.Gross.Add(gross)
+		monthTotal.AfterWithholding = monthTotal.AfterWithholding.Add(afterWithholding)
+		monthTotal.Net = monthTotal.Net.Add(net)
+		monthTotals[sourceRow.Year][sourceRow.Month] = monthTotal
+	}
+
+	years := make([]string, 0, len(yearTotals))
+	for year := range yearTotals {
+		years = append(years, year)
+	}
+	sort.Strings(years)
+
+	rows := make([]AnalysisRow, 0, len(years)*13)
+	for _, year := range years {
+		rows = append(rows, buildDividendsByYearMonthAnalysisRow("year", year, "", year, yearTotals[year], decimalPlaces, locale))
+		for month := 1; month <= 12; month++ {
+			monthKey := twoDigitMonth(month)
+			rows = append(rows, buildDividendsByYearMonthAnalysisRow("month", year, monthKey, monthKey, monthTotals[year][monthKey], decimalPlaces, locale))
+		}
+	}
+
+	return rows, true
+}
+
+func buildDividendsByYearMonthAnalysisRow(level, year, month, period string, totals dividendsByYearMonthTotals, decimalPlaces int32, locale string) AnalysisRow {
+	gross := totals.Gross.StringFixed(decimalPlaces)
+	afterWithholding := totals.AfterWithholding.StringFixed(decimalPlaces)
+	net := totals.Net.StringFixed(decimalPlaces)
+
+	return AnalysisRow{
+		"level":             level,
+		"year":              year,
+		"month":             month,
+		"period":            period,
+		"gross":             displayformat.DecimalForLocale(gross, locale),
+		"after_withholding": displayformat.DecimalForLocale(afterWithholding, locale),
+		"net":               displayformat.DecimalForLocale(net, locale),
+	}
+}
+
+func twoDigitMonth(month int) string {
+	return fmt.Sprintf("%02d", month)
+}
+
 func dividendsByYearColumns(currency string) []AnalysisColumn {
 	return []AnalysisColumn{
 		{
@@ -325,6 +503,38 @@ func dividendsByYearColumns(currency string) []AnalysisColumn {
 		{
 			Key:      "net",
 			LabelKey: "analyses.dividends_by_year.columns.net",
+			Datatype: "currency",
+			Currency: currency,
+			Align:    "right",
+		},
+	}
+}
+
+func dividendsByYearMonthColumns(currency string) []AnalysisColumn {
+	return []AnalysisColumn{
+		{
+			Key:      "period",
+			LabelKey: "analyses.common.period",
+			Datatype: "string",
+			Align:    "left",
+		},
+		{
+			Key:      "gross",
+			LabelKey: "analyses.dividends_by_year_month.columns.gross",
+			Datatype: "currency",
+			Currency: currency,
+			Align:    "right",
+		},
+		{
+			Key:      "after_withholding",
+			LabelKey: "analyses.dividends_by_year_month.columns.after_withholding",
+			Datatype: "currency",
+			Currency: currency,
+			Align:    "right",
+		},
+		{
+			Key:      "net",
+			LabelKey: "analyses.dividends_by_year_month.columns.net",
 			Datatype: "currency",
 			Currency: currency,
 			Align:    "right",
