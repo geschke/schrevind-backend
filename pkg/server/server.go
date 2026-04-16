@@ -129,6 +129,10 @@ func Start(database *db.DB) error {
 		router.GET("/api/exports/get/:filename", exportsCtl.GetFile)
 		router.OPTIONS("/api/exports/get/:filename", exportsCtl.Options)
 
+		analysesCtl := controller.NewAnalysesController(database, store, sessionName, g)
+		router.GET("/api/analyses/dividends-by-year", analysesCtl.GetDividendsByYear)
+		router.OPTIONS("/api/analyses/dividends-by-year", analysesCtl.Options)
+
 		dividendEntriesCtl := controller.NewDividendEntriesController(database, store, sessionName, g)
 		router.GET("/api/dividend-entries/by-user/:user_id", dividendEntriesCtl.GetListByUser)
 		router.OPTIONS("/api/dividend-entries/by-user/:user_id", dividendEntriesCtl.Options)

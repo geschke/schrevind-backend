@@ -199,6 +199,71 @@ SELECT d.id, d.name, d.broker_name, d.account_number, d.base_currency, d.descrip
 	return out, nil
 }
 
+// ListDepotsForActionScope returns depots covered by a many-entity permission scope.
+func (d *DB) ListDepotsForActionScope(userID int64, all bool, roles []string) ([]Depot, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	if userID <= 0 {
+		return nil, fmt.Errorf("userID must be > 0")
+	}
+
+	query := ""
+	args := make([]any, 0, 1+len(roles))
+	if all {
+		query = `
+SELECT id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at
+  FROM depots
+ ORDER BY id ASC;
+`
+	} else {
+		query = `
+SELECT DISTINCT d.id, d.name, d.broker_name, d.account_number, d.base_currency, d.description, d.status, d.created_at, d.updated_at
+  FROM depots d
+  JOIN memberships m ON m.entity_type = ? AND m.entity_id = d.id
+ WHERE m.user_id = ?
+`
+		args = append(args, EntityTypeDepot, userID)
+		if len(roles) > 0 {
+			query += "   AND m.role IN (" + sqlPlaceholders(len(roles)) + ")\n"
+			for _, role := range roles {
+				args = append(args, role)
+			}
+		}
+		query += " ORDER BY d.id ASC;"
+	}
+
+	rows, err := d.SQL.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list depots for action scope: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]Depot, 0)
+	for rows.Next() {
+		var depot Depot
+		if err := rows.Scan(
+			&depot.ID,
+			&depot.Name,
+			&depot.BrokerName,
+			&depot.AccountNumber,
+			&depot.BaseCurrency,
+			&depot.Description,
+			&depot.Status,
+			&depot.CreatedAt,
+			&depot.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan depot for action scope: %w", err)
+		}
+		out = append(out, depot)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate depots for action scope: %w", err)
+	}
+
+	return out, nil
+}
+
 // ListDepotsByGroupID returns all depots accessible to any user in the given group,
 // via their depot memberships. Used for the group admin depot overview.
 func (d *DB) ListDepotsByGroupID(groupID int64) ([]Depot, error) {
