@@ -48,6 +48,25 @@ type AnalysisColumn struct {
 
 type AnalysisRow map[string]string
 
+type YearChartResponse struct {
+	Success bool                  `json:"success"`
+	Message string                `json:"message"`
+	Data    YearChartResponseData `json:"data"`
+}
+
+type YearChartResponseData struct {
+	Categories []string          `json:"categories"`
+	Series     []YearChartSeries `json:"series"`
+}
+
+type YearChartSeries struct {
+	Key      string            `json:"key"`
+	Currency string            `json:"currency"`
+	Values   []YearChartNumber `json:"values"`
+}
+
+type YearChartNumber string
+
 type dividendsByYearTotals struct {
 	Gross            decimal.Decimal
 	AfterWithholding decimal.Decimal
@@ -58,6 +77,14 @@ type dividendsByYearMonthTotals struct {
 	Gross            decimal.Decimal
 	AfterWithholding decimal.Decimal
 	Net              decimal.Decimal
+}
+
+// MarshalJSON emits an already normalized decimal string as a JSON number.
+func (n YearChartNumber) MarshalJSON() ([]byte, error) {
+	if n == "" {
+		return []byte("0"), nil
+	}
+	return []byte(n), nil
 }
 
 // NewAnalysesController creates a controller for analysis HTTP handlers.
@@ -335,6 +362,89 @@ func (ct AnalysesController) GetDividendsByYearMonth(c *gin.Context) {
 	})
 }
 
+// GetDividendsByYearChart handles GET /api/analyses/dividends-by-year-chart.
+func (ct AnalysesController) GetDividendsByYearChart(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, err := ct.DB.ListDepotsForActionScope(userID, scope.All, scope.Roles)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	baseCurrency, ok, currencies := uniqueDepotBaseCurrency(depots)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "ANALYSIS_MULTIPLE_BASE_CURRENCIES",
+			"currencies": currencies,
+		})
+		return
+	}
+
+	decimalPlaces := int32(2)
+	if baseCurrency != "" {
+		currency, err := ct.DB.GetCurrencyByCurrency(baseCurrency)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if currency != nil {
+			decimalPlaces = int32(currency.DecimalPlaces)
+		}
+	}
+
+	depotIDs := make([]int64, 0, len(depots))
+	for _, depot := range depots {
+		depotIDs = append(depotIDs, depot.ID)
+	}
+
+	sourceRows, err := ct.DB.ListDividendAnalysisRowsByDepotIDs(depotIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	data, ok := buildDividendsByYearChartData(sourceRows, decimalPlaces, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "ANALYSIS_INVALID_DECIMAL_VALUE"})
+		return
+	}
+
+	c.JSON(http.StatusOK, YearChartResponse{
+		Success: true,
+		Message: "ANALYSIS_OK",
+		Data:    data,
+	})
+}
+
 func uniqueDepotBaseCurrency(depots []db.Depot) (string, bool, []string) {
 	set := make(map[string]struct{})
 	for _, depot := range depots {
@@ -404,6 +514,54 @@ func buildDividendsByYearRows(sourceRows []db.DividendsByYearSourceRow, decimalP
 	}
 
 	return rows, true
+}
+
+func buildDividendsByYearChartData(sourceRows []db.DividendsByYearSourceRow, decimalPlaces int32, currency string) (YearChartResponseData, bool) {
+	totalsByYear := make(map[string]dividendsByYearTotals)
+	for _, sourceRow := range sourceRows {
+		gross, err := decimal.NewFromString(sourceRow.Gross)
+		if err != nil {
+			return YearChartResponseData{}, false
+		}
+		afterWithholding, err := decimal.NewFromString(sourceRow.AfterWithholding)
+		if err != nil {
+			return YearChartResponseData{}, false
+		}
+		net, err := decimal.NewFromString(sourceRow.Net)
+		if err != nil {
+			return YearChartResponseData{}, false
+		}
+
+		totals := totalsByYear[sourceRow.Year]
+		totals.Gross = totals.Gross.Add(gross)
+		totals.AfterWithholding = totals.AfterWithholding.Add(afterWithholding)
+		totals.Net = totals.Net.Add(net)
+		totalsByYear[sourceRow.Year] = totals
+	}
+
+	years := make([]string, 0, len(totalsByYear))
+	for year := range totalsByYear {
+		years = append(years, year)
+	}
+	sort.Strings(years)
+
+	data := YearChartResponseData{
+		Categories: years,
+		Series: []YearChartSeries{
+			{Key: "gross", Currency: currency, Values: make([]YearChartNumber, 0, len(years))},
+			{Key: "after_withholding", Currency: currency, Values: make([]YearChartNumber, 0, len(years))},
+			{Key: "net", Currency: currency, Values: make([]YearChartNumber, 0, len(years))},
+		},
+	}
+
+	for _, year := range years {
+		totals := totalsByYear[year]
+		data.Series[0].Values = append(data.Series[0].Values, YearChartNumber(totals.Gross.StringFixed(decimalPlaces)))
+		data.Series[1].Values = append(data.Series[1].Values, YearChartNumber(totals.AfterWithholding.StringFixed(decimalPlaces)))
+		data.Series[2].Values = append(data.Series[2].Values, YearChartNumber(totals.Net.StringFixed(decimalPlaces)))
+	}
+
+	return data, true
 }
 
 func buildDividendsByYearMonthRows(sourceRows []db.DividendsByYearMonthSourceRow, decimalPlaces int32, locale string) ([]AnalysisRow, bool) {

@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"encoding/json"
 	"testing"
 
 	"github.com/geschke/schrevind/pkg/db"
@@ -75,6 +76,58 @@ func TestBuildDividendsByYearRowsFormatsLocale(t *testing.T) {
 	assertAnalysisRow(t, rows[0], "2022", "100,00", "80,00", "75,50")
 }
 
+func TestBuildDividendsByYearChartData(t *testing.T) {
+	data, ok := buildDividendsByYearChartData([]db.DividendsByYearSourceRow{
+		{Year: "2022", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},
+		{Year: "2021", Gross: "50.00", AfterWithholding: "40.00", Net: "35.00"},
+		{Year: "2022", Gross: "25.50", AfterWithholding: "20.25", Net: "19.25"},
+	}, 2, "EUR")
+	if !ok {
+		t.Fatalf("buildDividendsByYearChartData() ok = false, want true")
+	}
+
+	assertStringSlice(t, data.Categories, []string{"2021", "2022"})
+	if len(data.Series) != 3 {
+		t.Fatalf("buildDividendsByYearChartData() series len = %d, want 3", len(data.Series))
+	}
+
+	assertYearChartSeries(t, data.Series[0], "gross", "EUR", []YearChartNumber{"50.00", "125.50"})
+	assertYearChartSeries(t, data.Series[1], "after_withholding", "EUR", []YearChartNumber{"40.00", "100.25"})
+	assertYearChartSeries(t, data.Series[2], "net", "EUR", []YearChartNumber{"35.00", "94.25"})
+}
+
+func TestBuildDividendsByYearChartDataRejectsInvalidDecimal(t *testing.T) {
+	_, ok := buildDividendsByYearChartData([]db.DividendsByYearSourceRow{
+		{Year: "2022", Gross: "bad", AfterWithholding: "80.00", Net: "75.00"},
+	}, 2, "EUR")
+	if ok {
+		t.Fatalf("buildDividendsByYearChartData() ok = true, want false")
+	}
+}
+
+func TestYearChartResponseMarshalsValuesAsJSONNumbers(t *testing.T) {
+	response := YearChartResponse{
+		Success: true,
+		Message: "ANALYSIS_OK",
+		Data: YearChartResponseData{
+			Categories: []string{"2021"},
+			Series: []YearChartSeries{
+				{Key: "gross", Currency: "EUR", Values: []YearChartNumber{"1234.50"}},
+			},
+		},
+	}
+
+	got, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	want := `{"success":true,"message":"ANALYSIS_OK","data":{"categories":["2021"],"series":[{"key":"gross","currency":"EUR","values":[1234.50]}]}}`
+	if string(got) != want {
+		t.Fatalf("json.Marshal() = %s, want %s", got, want)
+	}
+}
+
 func TestBuildDividendsByYearMonthRows(t *testing.T) {
 	rows, ok := buildDividendsByYearMonthRows([]db.DividendsByYearMonthSourceRow{
 		{Year: "2022", Month: "01", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},
@@ -135,6 +188,36 @@ func assertAnalysisRow(t *testing.T, row AnalysisRow, year, gross, afterWithhold
 	}
 	if row["net"] != net {
 		t.Fatalf("row net = %q, want %q", row["net"], net)
+	}
+}
+
+func assertStringSlice(t *testing.T, got, want []string) {
+	t.Helper()
+	if len(got) != len(want) {
+		t.Fatalf("slice len = %d, want %d", len(got), len(want))
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("slice[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+}
+
+func assertYearChartSeries(t *testing.T, got YearChartSeries, key, currency string, values []YearChartNumber) {
+	t.Helper()
+	if got.Key != key {
+		t.Fatalf("series key = %q, want %q", got.Key, key)
+	}
+	if got.Currency != currency {
+		t.Fatalf("series currency = %q, want %q", got.Currency, currency)
+	}
+	if len(got.Values) != len(values) {
+		t.Fatalf("series values len = %d, want %d", len(got.Values), len(values))
+	}
+	for i := range got.Values {
+		if got.Values[i] != values[i] {
+			t.Fatalf("series values[%d] = %q, want %q", i, got.Values[i], values[i])
+		}
 	}
 }
 
