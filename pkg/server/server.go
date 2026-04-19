@@ -134,6 +134,8 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/analyses/dividends-by-year", analysesCtl.Options)
 		router.GET("/api/analyses/dividends-by-year-month", analysesCtl.GetDividendsByYearMonth)
 		router.OPTIONS("/api/analyses/dividends-by-year-month", analysesCtl.Options)
+		router.GET("/api/analyses/dividends-by-security-year", analysesCtl.GetDividendsBySecurityYear)
+		router.OPTIONS("/api/analyses/dividends-by-security-year", analysesCtl.Options)
 		router.GET("/api/analyses/dividends-by-year-chart", analysesCtl.GetDividendsByYearChart)
 		router.OPTIONS("/api/analyses/dividends-by-year-chart", analysesCtl.Options)
 
