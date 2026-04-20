@@ -102,6 +102,21 @@ type dividendsBySecurityYearGroup struct {
 	Net              decimal.Decimal
 }
 
+type dividendsByYearMonthSecurityGroupKey struct {
+	Year         string
+	Month        string
+	SecurityID   int64
+	SecurityName string
+	SecurityISIN string
+}
+
+type dividendsByYearMonthSecurityGroup struct {
+	dividendsByYearMonthSecurityGroupKey
+	Gross            decimal.Decimal
+	AfterWithholding decimal.Decimal
+	Net              decimal.Decimal
+}
+
 // MarshalJSON emits an already normalized decimal string as a JSON number.
 func (n YearChartNumber) MarshalJSON() ([]byte, error) {
 	if n == "" {
@@ -490,6 +505,111 @@ func (ct AnalysesController) GetDividendsBySecurityYear(c *gin.Context) {
 	})
 }
 
+// GetDividendsByYearMonthSecurity handles GET /api/analyses/dividends-by-year-month-security.
+func (ct AnalysesController) GetDividendsByYearMonthSecurity(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, err := ct.DB.ListDepotsForActionScope(userID, scope.All, scope.Roles)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, ok, statusCode, message := filterDepotsByQuery(c, depots)
+	if !ok {
+		c.JSON(statusCode, gin.H{"success": false, "message": message})
+		return
+	}
+
+	baseCurrency, ok, currencies := uniqueDepotBaseCurrency(depots)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "ANALYSIS_MULTIPLE_BASE_CURRENCIES",
+			"currencies": currencies,
+		})
+		return
+	}
+
+	decimalPlaces := int32(2)
+	if baseCurrency != "" {
+		currency, err := ct.DB.GetCurrencyByCurrency(baseCurrency)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if currency != nil {
+			decimalPlaces = int32(currency.DecimalPlaces)
+		}
+	}
+
+	depotIDs := make([]int64, 0, len(depots))
+	for _, depot := range depots {
+		depotIDs = append(depotIDs, depot.ID)
+	}
+
+	sourceRows, err := ct.DB.ListDividendAnalysisYearMonthSecurityRowsByDepotIDs(depotIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	rows, ok := buildDividendsByYearMonthSecurityRows(sourceRows, decimalPlaces, locale)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "ANALYSIS_INVALID_DECIMAL_VALUE"})
+		return
+	}
+
+	c.JSON(http.StatusOK, AnalysisResponse{
+		Success: true,
+		Message: "ANALYSIS_OK",
+		Data: AnalysisData{
+			ID:       "dividends_by_year_month_security",
+			TitleKey: "analyses.dividends_by_year_month_security.title",
+			Type:     "table",
+			Columns:  dividendsByYearMonthSecurityColumns(baseCurrency),
+			Rows:     rows,
+		},
+	})
+}
+
 // GetDividendsByYearChart handles GET /api/analyses/dividends-by-year-chart.
 func (ct AnalysesController) GetDividendsByYearChart(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
@@ -864,6 +984,128 @@ func buildDividendsBySecurityYearSummaryRow(security dividendsBySecurityKey, tot
 	}
 }
 
+func buildDividendsByYearMonthSecurityRows(sourceRows []db.DividendsByYearMonthSecuritySourceRow, decimalPlaces int32, locale string) ([]AnalysisRow, bool) {
+	groupsByKey := make(map[dividendsByYearMonthSecurityGroupKey]*dividendsByYearMonthSecurityGroup)
+	for _, sourceRow := range sourceRows {
+		gross, err := decimal.NewFromString(sourceRow.Gross)
+		if err != nil {
+			return nil, false
+		}
+		afterWithholding, err := decimal.NewFromString(sourceRow.AfterWithholding)
+		if err != nil {
+			return nil, false
+		}
+		net, err := decimal.NewFromString(sourceRow.Net)
+		if err != nil {
+			return nil, false
+		}
+
+		key := dividendsByYearMonthSecurityGroupKey{
+			Year:         sourceRow.Year,
+			Month:        sourceRow.Month,
+			SecurityID:   sourceRow.SecurityID,
+			SecurityName: sourceRow.SecurityName,
+			SecurityISIN: sourceRow.SecurityISIN,
+		}
+		group := groupsByKey[key]
+		if group == nil {
+			group = &dividendsByYearMonthSecurityGroup{
+				dividendsByYearMonthSecurityGroupKey: key,
+			}
+			groupsByKey[key] = group
+		}
+		group.Gross = group.Gross.Add(gross)
+		group.AfterWithholding = group.AfterWithholding.Add(afterWithholding)
+		group.Net = group.Net.Add(net)
+	}
+
+	groups := make([]dividendsByYearMonthSecurityGroup, 0, len(groupsByKey))
+	for _, group := range groupsByKey {
+		groups = append(groups, *group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		return dividendsByYearMonthSecurityGroupLess(groups[i], groups[j])
+	})
+
+	rows := make([]AnalysisRow, 0, len(groups))
+	var currentYear string
+	var currentMonth string
+	var currentTotals dividendsByYearTotals
+	hasCurrentMonth := false
+
+	appendMonthSummary := func() {
+		rows = append(rows, buildDividendsByYearMonthSecuritySummaryRow(currentYear, currentMonth, currentTotals, decimalPlaces, locale))
+	}
+
+	for _, group := range groups {
+		if hasCurrentMonth && (group.Year != currentYear || group.Month != currentMonth) {
+			appendMonthSummary()
+			currentTotals = dividendsByYearTotals{}
+		}
+		if !hasCurrentMonth || group.Year != currentYear || group.Month != currentMonth {
+			currentYear = group.Year
+			currentMonth = group.Month
+			hasCurrentMonth = true
+		}
+
+		rows = append(rows, buildDividendsByYearMonthSecurityDetailRow(group, decimalPlaces, locale))
+		currentTotals.Gross = currentTotals.Gross.Add(group.Gross)
+		currentTotals.AfterWithholding = currentTotals.AfterWithholding.Add(group.AfterWithholding)
+		currentTotals.Net = currentTotals.Net.Add(group.Net)
+	}
+
+	if hasCurrentMonth {
+		appendMonthSummary()
+	}
+
+	return rows, true
+}
+
+func dividendsByYearMonthSecurityGroupLess(left, right dividendsByYearMonthSecurityGroup) bool {
+	if left.Year != right.Year {
+		return left.Year < right.Year
+	}
+	if left.Month != right.Month {
+		return left.Month < right.Month
+	}
+	leftName := strings.ToLower(left.SecurityName)
+	rightName := strings.ToLower(right.SecurityName)
+	if leftName != rightName {
+		return leftName < rightName
+	}
+	if left.SecurityName != right.SecurityName {
+		return left.SecurityName < right.SecurityName
+	}
+	if left.SecurityISIN != right.SecurityISIN {
+		return left.SecurityISIN < right.SecurityISIN
+	}
+	return left.SecurityID < right.SecurityID
+}
+
+func buildDividendsByYearMonthSecurityDetailRow(group dividendsByYearMonthSecurityGroup, decimalPlaces int32, locale string) AnalysisRow {
+	return AnalysisRow{
+		"year":              group.Year,
+		"month":             group.Month,
+		"security_name":     group.SecurityName,
+		"security_isin":     group.SecurityISIN,
+		"gross":             displayformat.DecimalForLocale(group.Gross.StringFixed(decimalPlaces), locale),
+		"after_withholding": displayformat.DecimalForLocale(group.AfterWithholding.StringFixed(decimalPlaces), locale),
+		"net":               displayformat.DecimalForLocale(group.Net.StringFixed(decimalPlaces), locale),
+	}
+}
+
+func buildDividendsByYearMonthSecuritySummaryRow(year, month string, totals dividendsByYearTotals, decimalPlaces int32, locale string) AnalysisRow {
+	return AnalysisRow{
+		"year":              year,
+		"month":             month,
+		"security_name":     "Monat Ergebnis",
+		"security_isin":     "",
+		"gross":             displayformat.DecimalForLocale(totals.Gross.StringFixed(decimalPlaces), locale),
+		"after_withholding": displayformat.DecimalForLocale(totals.AfterWithholding.StringFixed(decimalPlaces), locale),
+		"net":               displayformat.DecimalForLocale(totals.Net.StringFixed(decimalPlaces), locale),
+	}
+}
+
 func buildDividendsByYearMonthRows(sourceRows []db.DividendsByYearMonthSourceRow, decimalPlaces int32, locale string) ([]AnalysisRow, bool) {
 	yearTotals := make(map[string]dividendsByYearMonthTotals)
 	monthTotals := make(map[string]map[string]dividendsByYearMonthTotals)
@@ -1043,6 +1285,56 @@ func dividendsBySecurityYearColumns(currency string) []AnalysisColumn {
 		{
 			Key:      "net",
 			LabelKey: "analyses.dividends_by_security_year.columns.net",
+			Datatype: "currency",
+			Currency: currency,
+			Align:    "right",
+		},
+	}
+}
+
+func dividendsByYearMonthSecurityColumns(currency string) []AnalysisColumn {
+	return []AnalysisColumn{
+		{
+			Key:      "year",
+			LabelKey: "analyses.common.year",
+			Datatype: "string",
+			Align:    "left",
+		},
+		{
+			Key:      "month",
+			LabelKey: "analyses.common.month",
+			Datatype: "string",
+			Align:    "left",
+		},
+		{
+			Key:      "security_name",
+			LabelKey: "analyses.dividends_by_year_month_security.columns.security_name",
+			Datatype: "string",
+			Align:    "left",
+		},
+		{
+			Key:      "security_isin",
+			LabelKey: "analyses.dividends_by_year_month_security.columns.security_isin",
+			Datatype: "string",
+			Align:    "left",
+		},
+		{
+			Key:      "gross",
+			LabelKey: "analyses.dividends_by_year_month_security.columns.gross",
+			Datatype: "currency",
+			Currency: currency,
+			Align:    "right",
+		},
+		{
+			Key:      "after_withholding",
+			LabelKey: "analyses.dividends_by_year_month_security.columns.after_withholding",
+			Datatype: "currency",
+			Currency: currency,
+			Align:    "right",
+		},
+		{
+			Key:      "net",
+			LabelKey: "analyses.dividends_by_year_month_security.columns.net",
 			Datatype: "currency",
 			Currency: currency,
 			Align:    "right",

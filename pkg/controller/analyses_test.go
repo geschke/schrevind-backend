@@ -243,6 +243,54 @@ func TestBuildDividendsBySecurityYearRowsFormatsLocale(t *testing.T) {
 	assertSecurityYearRow(t, rows[1], "Example Alpha AG Ergebnis", "", "", "", "10,50", "8,25", "7,75")
 }
 
+func TestBuildDividendsByYearMonthSecurityRows(t *testing.T) {
+	rows, ok := buildDividendsByYearMonthSecurityRows([]db.DividendsByYearMonthSecuritySourceRow{
+		{Year: "2024", Month: "01", SecurityID: 2, SecurityName: "Example Beta AG", SecurityISIN: "DE000BETA01", Gross: "5.00", AfterWithholding: "4.00", Net: "3.50"},
+		{Year: "2024", Month: "01", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "10.00", AfterWithholding: "8.00", Net: "7.50"},
+		{Year: "2024", Month: "01", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "20.00", AfterWithholding: "17.00", Net: "16.50"},
+		{Year: "2024", Month: "02", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "7.00", AfterWithholding: "6.00", Net: "5.50"},
+		{Year: "2023", Month: "12", SecurityID: 3, SecurityName: "Example Gamma AG", SecurityISIN: "DE000GAMMA1", Gross: "3.00", AfterWithholding: "2.00", Net: "1.50"},
+	}, 2, "en-US")
+	if !ok {
+		t.Fatalf("buildDividendsByYearMonthSecurityRows() ok = false, want true")
+	}
+	if len(rows) != 7 {
+		t.Fatalf("buildDividendsByYearMonthSecurityRows() len = %d, want 7", len(rows))
+	}
+
+	assertYearMonthSecurityRow(t, rows[0], "2023", "12", "Example Gamma AG", "DE000GAMMA1", "3.00", "2.00", "1.50")
+	assertYearMonthSecurityRow(t, rows[1], "2023", "12", "Monat Ergebnis", "", "3.00", "2.00", "1.50")
+	assertYearMonthSecurityRow(t, rows[2], "2024", "01", "Example Alpha AG", "DE000ALPHA1", "30.00", "25.00", "24.00")
+	assertYearMonthSecurityRow(t, rows[3], "2024", "01", "Example Beta AG", "DE000BETA01", "5.00", "4.00", "3.50")
+	assertYearMonthSecurityRow(t, rows[4], "2024", "01", "Monat Ergebnis", "", "35.00", "29.00", "27.50")
+	assertYearMonthSecurityRow(t, rows[5], "2024", "02", "Example Alpha AG", "DE000ALPHA1", "7.00", "6.00", "5.50")
+	assertYearMonthSecurityRow(t, rows[6], "2024", "02", "Monat Ergebnis", "", "7.00", "6.00", "5.50")
+}
+
+func TestBuildDividendsByYearMonthSecurityRowsRejectsInvalidDecimal(t *testing.T) {
+	_, ok := buildDividendsByYearMonthSecurityRows([]db.DividendsByYearMonthSecuritySourceRow{
+		{Year: "2024", Month: "01", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "bad", AfterWithholding: "8.00", Net: "7.50"},
+	}, 2, "en-US")
+	if ok {
+		t.Fatalf("buildDividendsByYearMonthSecurityRows() ok = true, want false")
+	}
+}
+
+func TestBuildDividendsByYearMonthSecurityRowsFormatsLocale(t *testing.T) {
+	rows, ok := buildDividendsByYearMonthSecurityRows([]db.DividendsByYearMonthSecuritySourceRow{
+		{Year: "2024", Month: "01", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "10.50", AfterWithholding: "8.25", Net: "7.75"},
+	}, 2, "de-DE")
+	if !ok {
+		t.Fatalf("buildDividendsByYearMonthSecurityRows() ok = false, want true")
+	}
+	if len(rows) != 2 {
+		t.Fatalf("buildDividendsByYearMonthSecurityRows() len = %d, want 2", len(rows))
+	}
+
+	assertYearMonthSecurityRow(t, rows[0], "2024", "01", "Example Alpha AG", "DE000ALPHA1", "10,50", "8,25", "7,75")
+	assertYearMonthSecurityRow(t, rows[1], "2024", "01", "Monat Ergebnis", "", "10,50", "8,25", "7,75")
+}
+
 func TestBuildDividendsByYearMonthRows(t *testing.T) {
 	rows, ok := buildDividendsByYearMonthRows([]db.DividendsByYearMonthSourceRow{
 		{Year: "2022", Month: "01", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},
@@ -349,6 +397,31 @@ func assertSecurityYearRow(t *testing.T, row AnalysisRow, securityName, security
 	}
 	if row["quantity"] != quantity {
 		t.Fatalf("row quantity = %q, want %q", row["quantity"], quantity)
+	}
+	if row["gross"] != gross {
+		t.Fatalf("row gross = %q, want %q", row["gross"], gross)
+	}
+	if row["after_withholding"] != afterWithholding {
+		t.Fatalf("row after_withholding = %q, want %q", row["after_withholding"], afterWithholding)
+	}
+	if row["net"] != net {
+		t.Fatalf("row net = %q, want %q", row["net"], net)
+	}
+}
+
+func assertYearMonthSecurityRow(t *testing.T, row AnalysisRow, year, month, securityName, securityISIN, gross, afterWithholding, net string) {
+	t.Helper()
+	if row["year"] != year {
+		t.Fatalf("row year = %q, want %q", row["year"], year)
+	}
+	if row["month"] != month {
+		t.Fatalf("row month = %q, want %q", row["month"], month)
+	}
+	if row["security_name"] != securityName {
+		t.Fatalf("row security_name = %q, want %q", row["security_name"], securityName)
+	}
+	if row["security_isin"] != securityISIN {
+		t.Fatalf("row security_isin = %q, want %q", row["security_isin"], securityISIN)
 	}
 	if row["gross"] != gross {
 		t.Fatalf("row gross = %q, want %q", row["gross"], gross)
