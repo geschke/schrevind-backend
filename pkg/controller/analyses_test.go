@@ -173,6 +173,37 @@ func TestBuildDividendsByYearChartDataRejectsInvalidDecimal(t *testing.T) {
 	}
 }
 
+func TestBuildDividendsByYearMonthChartData(t *testing.T) {
+	data, ok := buildDividendsByYearMonthChartData([]db.DividendsByYearMonthSourceRow{
+		{Year: "2022", Month: "01", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},
+		{Year: "2021", Month: "12", Gross: "50.00", AfterWithholding: "40.00", Net: "35.00"},
+		{Year: "2022", Month: "01", Gross: "25.50", AfterWithholding: "20.25", Net: "19.25"},
+		{Year: "2022", Month: "03", Gross: "10.00", AfterWithholding: "9.00", Net: "8.00"},
+	}, 2, "EUR")
+	if !ok {
+		t.Fatalf("buildDividendsByYearMonthChartData() ok = false, want true")
+	}
+
+	if len(data.Rows) != 24 {
+		t.Fatalf("buildDividendsByYearMonthChartData() rows len = %d, want 24", len(data.Rows))
+	}
+
+	assertYearMonthChartRow(t, data.Rows[0], "2021", "01", "0.00", "0.00", "0.00", "EUR")
+	assertYearMonthChartRow(t, data.Rows[11], "2021", "12", "50.00", "40.00", "35.00", "EUR")
+	assertYearMonthChartRow(t, data.Rows[12], "2022", "01", "125.50", "100.25", "94.25", "EUR")
+	assertYearMonthChartRow(t, data.Rows[14], "2022", "03", "10.00", "9.00", "8.00", "EUR")
+	assertYearMonthChartRow(t, data.Rows[23], "2022", "12", "0.00", "0.00", "0.00", "EUR")
+}
+
+func TestBuildDividendsByYearMonthChartDataRejectsInvalidDecimal(t *testing.T) {
+	_, ok := buildDividendsByYearMonthChartData([]db.DividendsByYearMonthSourceRow{
+		{Year: "2022", Month: "01", Gross: "bad", AfterWithholding: "80.00", Net: "75.00"},
+	}, 2, "EUR")
+	if ok {
+		t.Fatalf("buildDividendsByYearMonthChartData() ok = true, want false")
+	}
+}
+
 func TestYearChartResponseMarshalsValuesAsJSONNumbers(t *testing.T) {
 	response := YearChartResponse{
 		Success: true,
@@ -191,6 +222,35 @@ func TestYearChartResponseMarshalsValuesAsJSONNumbers(t *testing.T) {
 	}
 
 	want := `{"success":true,"message":"ANALYSIS_OK","data":{"categories":["2021"],"series":[{"key":"gross","currency":"EUR","values":[1234.50]}]}}`
+	if string(got) != want {
+		t.Fatalf("json.Marshal() = %s, want %s", got, want)
+	}
+}
+
+func TestYearMonthChartResponseMarshalsValuesAsJSONNumbers(t *testing.T) {
+	response := YearMonthChartResponse{
+		Success: true,
+		Message: "ANALYSIS_OK",
+		Data: YearMonthChartResponseData{
+			Rows: []YearMonthChartRow{
+				{
+					Year:             "2021",
+					Month:            "01",
+					Gross:            "1234.50",
+					AfterWithholding: "1200.00",
+					Net:              "1100.75",
+					Currency:         "EUR",
+				},
+			},
+		},
+	}
+
+	got, err := json.Marshal(response)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+
+	want := `{"success":true,"message":"ANALYSIS_OK","data":{"rows":[{"year":"2021","month":"01","gross":1234.50,"after_withholding":1200.00,"net":1100.75,"currency":"EUR"}]}}`
 	if string(got) != want {
 		t.Fatalf("json.Marshal() = %s, want %s", got, want)
 	}
@@ -381,6 +441,28 @@ func assertYearChartSeries(t *testing.T, got YearChartSeries, key, currency stri
 		if got.Values[i] != values[i] {
 			t.Fatalf("series values[%d] = %q, want %q", i, got.Values[i], values[i])
 		}
+	}
+}
+
+func assertYearMonthChartRow(t *testing.T, got YearMonthChartRow, year, month, gross, afterWithholding, net, currency string) {
+	t.Helper()
+	if got.Year != year {
+		t.Fatalf("row year = %q, want %q", got.Year, year)
+	}
+	if got.Month != month {
+		t.Fatalf("row month = %q, want %q", got.Month, month)
+	}
+	if got.Gross != YearChartNumber(gross) {
+		t.Fatalf("row gross = %q, want %q", got.Gross, gross)
+	}
+	if got.AfterWithholding != YearChartNumber(afterWithholding) {
+		t.Fatalf("row after_withholding = %q, want %q", got.AfterWithholding, afterWithholding)
+	}
+	if got.Net != YearChartNumber(net) {
+		t.Fatalf("row net = %q, want %q", got.Net, net)
+	}
+	if got.Currency != currency {
+		t.Fatalf("row currency = %q, want %q", got.Currency, currency)
 	}
 }
 

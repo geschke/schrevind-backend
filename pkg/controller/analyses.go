@@ -68,6 +68,25 @@ type YearChartSeries struct {
 
 type YearChartNumber string
 
+type YearMonthChartResponse struct {
+	Success bool                       `json:"success"`
+	Message string                     `json:"message"`
+	Data    YearMonthChartResponseData `json:"data"`
+}
+
+type YearMonthChartResponseData struct {
+	Rows []YearMonthChartRow `json:"rows"`
+}
+
+type YearMonthChartRow struct {
+	Year             string          `json:"year"`
+	Month            string          `json:"month"`
+	Gross            YearChartNumber `json:"gross"`
+	AfterWithholding YearChartNumber `json:"after_withholding"`
+	Net              YearChartNumber `json:"net"`
+	Currency         string          `json:"currency"`
+}
+
 type dividendsByYearTotals struct {
 	Gross            decimal.Decimal
 	AfterWithholding decimal.Decimal
@@ -699,6 +718,95 @@ func (ct AnalysesController) GetDividendsByYearChart(c *gin.Context) {
 	})
 }
 
+// GetDividendsByYearMonthChart handles GET /api/analyses/dividends-by-year-month-chart.
+func (ct AnalysesController) GetDividendsByYearMonthChart(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, err := ct.DB.ListDepotsForActionScope(userID, scope.All, scope.Roles)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, ok, statusCode, message := filterDepotsByQuery(c, depots)
+	if !ok {
+		c.JSON(statusCode, gin.H{"success": false, "message": message})
+		return
+	}
+
+	baseCurrency, ok, currencies := uniqueDepotBaseCurrency(depots)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "ANALYSIS_MULTIPLE_BASE_CURRENCIES",
+			"currencies": currencies,
+		})
+		return
+	}
+
+	decimalPlaces := int32(2)
+	if baseCurrency != "" {
+		currency, err := ct.DB.GetCurrencyByCurrency(baseCurrency)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if currency != nil {
+			decimalPlaces = int32(currency.DecimalPlaces)
+		}
+	}
+
+	depotIDs := make([]int64, 0, len(depots))
+	for _, depot := range depots {
+		depotIDs = append(depotIDs, depot.ID)
+	}
+
+	sourceRows, err := ct.DB.ListDividendAnalysisMonthRowsByDepotIDs(depotIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	data, ok := buildDividendsByYearMonthChartData(sourceRows, decimalPlaces, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "ANALYSIS_INVALID_DECIMAL_VALUE"})
+		return
+	}
+
+	c.JSON(http.StatusOK, YearMonthChartResponse{
+		Success: true,
+		Message: "ANALYSIS_OK",
+		Data:    data,
+	})
+}
+
 func filterDepotsByQuery(c *gin.Context, depots []db.Depot) ([]db.Depot, bool, int, string) {
 	return filterDepotsByRequestedIDs(c.QueryArray("depot_id"), depots)
 }
@@ -847,6 +955,68 @@ func buildDividendsByYearChartData(sourceRows []db.DividendsByYearSourceRow, dec
 		data.Series[0].Values = append(data.Series[0].Values, YearChartNumber(totals.Gross.StringFixed(decimalPlaces)))
 		data.Series[1].Values = append(data.Series[1].Values, YearChartNumber(totals.AfterWithholding.StringFixed(decimalPlaces)))
 		data.Series[2].Values = append(data.Series[2].Values, YearChartNumber(totals.Net.StringFixed(decimalPlaces)))
+	}
+
+	return data, true
+}
+
+func buildDividendsByYearMonthChartData(sourceRows []db.DividendsByYearMonthSourceRow, decimalPlaces int32, currency string) (YearMonthChartResponseData, bool) {
+	yearTotals := make(map[string]dividendsByYearMonthTotals)
+	monthTotals := make(map[string]map[string]dividendsByYearMonthTotals)
+
+	for _, sourceRow := range sourceRows {
+		gross, err := decimal.NewFromString(sourceRow.Gross)
+		if err != nil {
+			return YearMonthChartResponseData{}, false
+		}
+		afterWithholding, err := decimal.NewFromString(sourceRow.AfterWithholding)
+		if err != nil {
+			return YearMonthChartResponseData{}, false
+		}
+		net, err := decimal.NewFromString(sourceRow.Net)
+		if err != nil {
+			return YearMonthChartResponseData{}, false
+		}
+
+		yearTotal := yearTotals[sourceRow.Year]
+		yearTotal.Gross = yearTotal.Gross.Add(gross)
+		yearTotal.AfterWithholding = yearTotal.AfterWithholding.Add(afterWithholding)
+		yearTotal.Net = yearTotal.Net.Add(net)
+		yearTotals[sourceRow.Year] = yearTotal
+
+		if monthTotals[sourceRow.Year] == nil {
+			monthTotals[sourceRow.Year] = make(map[string]dividendsByYearMonthTotals)
+		}
+		monthTotal := monthTotals[sourceRow.Year][sourceRow.Month]
+		monthTotal.Gross = monthTotal.Gross.Add(gross)
+		monthTotal.AfterWithholding = monthTotal.AfterWithholding.Add(afterWithholding)
+		monthTotal.Net = monthTotal.Net.Add(net)
+		monthTotals[sourceRow.Year][sourceRow.Month] = monthTotal
+	}
+
+	years := make([]string, 0, len(yearTotals))
+	for year := range yearTotals {
+		years = append(years, year)
+	}
+	sort.Strings(years)
+
+	data := YearMonthChartResponseData{
+		Rows: make([]YearMonthChartRow, 0, len(years)*12),
+	}
+
+	for _, year := range years {
+		for month := 1; month <= 12; month++ {
+			monthKey := twoDigitMonth(month)
+			totals := monthTotals[year][monthKey]
+			data.Rows = append(data.Rows, YearMonthChartRow{
+				Year:             year,
+				Month:            monthKey,
+				Gross:            YearChartNumber(totals.Gross.StringFixed(decimalPlaces)),
+				AfterWithholding: YearChartNumber(totals.AfterWithholding.StringFixed(decimalPlaces)),
+				Net:              YearChartNumber(totals.Net.StringFixed(decimalPlaces)),
+				Currency:         currency,
+			})
+		}
 	}
 
 	return data, true
