@@ -15,6 +15,7 @@ const (
 
 type Currency struct {
 	ID            int64  `json:"ID"`
+	GroupID       int64  `json:"GroupID"`
 	Currency      string `json:"Currency,omitempty"`
 	Name          string `json:"Name,omitempty"`
 	DecimalPlaces int64  `json:"DecimalPlaces"`
@@ -31,6 +32,9 @@ func normalizeCurrency(currency Currency) (Currency, error) {
 
 	if !isValidCurrencyCode(currency.Currency) {
 		return Currency{}, fmt.Errorf("currency must be a 3-letter uppercase code")
+	}
+	if currency.GroupID < 0 {
+		return Currency{}, fmt.Errorf("group_id must be >= 0")
 	}
 	if currency.DecimalPlaces < 0 {
 		return Currency{}, fmt.Errorf("decimal_places must be >= 0")
@@ -65,6 +69,7 @@ func scanCurrency(scanner interface {
 	var currency Currency
 	if err := scanner.Scan(
 		&currency.ID,
+		&currency.GroupID,
 		&currency.Currency,
 		&currency.Name,
 		&currency.DecimalPlaces,
@@ -107,9 +112,9 @@ func (d *DB) CreateCurrency(currency *Currency) error {
 
 	res, err := d.SQL.Exec(`
 INSERT INTO currencies (
-  currency, name, decimal_places, status, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?);
-`, normalized.Currency, normalized.Name, normalized.DecimalPlaces, normalized.Status, normalized.CreatedAt, normalized.UpdatedAt)
+  group_id, currency, name, decimal_places, status, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?);
+`, normalized.GroupID, normalized.Currency, normalized.Name, normalized.DecimalPlaces, normalized.Status, normalized.CreatedAt, normalized.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create currency: %w", err)
 	}
@@ -148,8 +153,9 @@ UPDATE currencies
        decimal_places = ?,
        status = ?,
        updated_at = ?
- WHERE id = ?;
-`, normalized.Currency, normalized.Name, normalized.DecimalPlaces, normalized.Status, normalized.UpdatedAt, normalized.ID)
+ WHERE id = ?
+   AND group_id = ?;
+`, normalized.Currency, normalized.Name, normalized.DecimalPlaces, normalized.Status, normalized.UpdatedAt, normalized.ID, normalized.GroupID)
 	if err != nil {
 		return fmt.Errorf("update currency: %w", err)
 	}
@@ -158,21 +164,25 @@ UPDATE currencies
 	return nil
 }
 
-// GetCurrencyByID returns data for the requested input.
-func (d *DB) GetCurrencyByID(id int64) (*Currency, error) {
+// GetCurrencyByIDAndGroupID returns data for the requested input.
+func (d *DB) GetCurrencyByIDAndGroupID(id, groupID int64) (*Currency, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	if id <= 0 {
 		return nil, fmt.Errorf("id must be > 0")
 	}
+	if groupID < 0 {
+		return nil, fmt.Errorf("group_id must be >= 0")
+	}
 
 	row := d.SQL.QueryRow(`
-SELECT id, currency, name, decimal_places, status, created_at, updated_at
+SELECT id, group_id, currency, name, decimal_places, status, created_at, updated_at
   FROM currencies
  WHERE id = ?
+   AND group_id = ?
  LIMIT 1;
-`, id)
+`, id, groupID)
 
 	currency, err := scanCurrency(row)
 	if err == sql.ErrNoRows {
@@ -185,10 +195,13 @@ SELECT id, currency, name, decimal_places, status, created_at, updated_at
 	return currency, nil
 }
 
-// GetCurrencyByCurrency returns data for the requested input.
-func (d *DB) GetCurrencyByCurrency(currencyCode string) (*Currency, error) {
+// GetCurrencyByCurrencyAndGroupID returns data for the requested input.
+func (d *DB) GetCurrencyByCurrencyAndGroupID(currencyCode string, groupID int64) (*Currency, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
+	}
+	if groupID < 0 {
+		return nil, fmt.Errorf("group_id must be >= 0")
 	}
 
 	currencyCode = strings.ToUpper(strings.TrimSpace(currencyCode))
@@ -197,11 +210,12 @@ func (d *DB) GetCurrencyByCurrency(currencyCode string) (*Currency, error) {
 	}
 
 	row := d.SQL.QueryRow(`
-SELECT id, currency, name, decimal_places, status, created_at, updated_at
+SELECT id, group_id, currency, name, decimal_places, status, created_at, updated_at
   FROM currencies
  WHERE currency = ?
+   AND group_id = ?
  LIMIT 1;
-`, currencyCode)
+`, currencyCode, groupID)
 
 	currency, err := scanCurrency(row)
 	if err == sql.ErrNoRows {
@@ -214,10 +228,13 @@ SELECT id, currency, name, decimal_places, status, created_at, updated_at
 	return currency, nil
 }
 
-// ListCurrencies returns a list for the requested filter.
-func (d *DB) ListCurrencies(limit, offset int, sortBy, status string) ([]Currency, error) {
+// ListCurrenciesByGroupID returns a list for the requested filter.
+func (d *DB) ListCurrenciesByGroupID(groupID int64, limit, offset int, sortBy, status string) ([]Currency, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
+	}
+	if groupID < 0 {
+		return nil, fmt.Errorf("group_id must be >= 0")
 	}
 	if limit < 0 {
 		return nil, fmt.Errorf("limit must be >= 0")
@@ -234,13 +251,15 @@ func (d *DB) ListCurrencies(limit, offset int, sortBy, status string) ([]Currenc
 	status = strings.TrimSpace(status)
 
 	query := `
-SELECT id, currency, name, decimal_places, status, created_at, updated_at
+SELECT id, group_id, currency, name, decimal_places, status, created_at, updated_at
   FROM currencies
+ WHERE group_id = ?
 `
-	args := make([]any, 0, 3)
+	args := make([]any, 0, 4)
+	args = append(args, groupID)
 
 	if status != "" {
-		query += " WHERE status = ?\n"
+		query += "   AND status = ?\n"
 		args = append(args, status)
 	}
 
@@ -276,7 +295,7 @@ func (d *DB) ListAllCurrencies() ([]Currency, error) {
 	}
 
 	rows, err := d.SQL.Query(`
-SELECT id, currency, name, decimal_places, status, created_at, updated_at
+SELECT id, group_id, currency, name, decimal_places, status, created_at, updated_at
   FROM currencies
  ORDER BY id ASC;
 `)
@@ -300,18 +319,22 @@ SELECT id, currency, name, decimal_places, status, created_at, updated_at
 	return out, nil
 }
 
-// CountCurrencies returns the total number of currencies matching the given status filter.
+// CountCurrenciesByGroupID returns the total number of currencies matching the given status filter.
 // An empty status string counts all currencies regardless of status.
-func (d *DB) CountCurrencies(status string) (int64, error) {
+func (d *DB) CountCurrenciesByGroupID(groupID int64, status string) (int64, error) {
 	if d == nil || d.SQL == nil {
 		return 0, fmt.Errorf("db not initialized")
 	}
+	if groupID < 0 {
+		return 0, fmt.Errorf("group_id must be >= 0")
+	}
 
 	status = strings.TrimSpace(status)
-	query := `SELECT COUNT(*) FROM currencies`
-	args := make([]any, 0, 1)
+	query := `SELECT COUNT(*) FROM currencies WHERE group_id = ?`
+	args := make([]any, 0, 2)
+	args = append(args, groupID)
 	if status != "" {
-		query += " WHERE status = ?"
+		query += " AND status = ?"
 		args = append(args, status)
 	}
 	query += ";"
@@ -345,18 +368,45 @@ UPDATE currencies
 	return nil
 }
 
-// DeleteCurrency deletes the currency record by ID.
-func (d *DB) DeleteCurrency(id int64) error {
+// DeleteCurrencyByIDAndGroupID deletes the currency record by ID.
+func (d *DB) DeleteCurrencyByIDAndGroupID(id, groupID int64) error {
 	if d == nil || d.SQL == nil {
 		return fmt.Errorf("db not initialized")
 	}
 	if id <= 0 {
 		return fmt.Errorf("id must be > 0")
 	}
+	if groupID < 0 {
+		return fmt.Errorf("group_id must be >= 0")
+	}
 
-	_, err := d.SQL.Exec(`DELETE FROM currencies WHERE id = ?;`, id)
+	_, err := d.SQL.Exec(`DELETE FROM currencies WHERE id = ? AND group_id = ?;`, id, groupID)
 	if err != nil {
 		return fmt.Errorf("delete currency: %w", err)
+	}
+	return nil
+}
+
+// CopyDefaultCurrenciesToGroup copies all template currencies (group_id = 0) into the target group.
+func (d *DB) CopyDefaultCurrenciesToGroup(groupID int64) error {
+	if d == nil || d.SQL == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	if groupID <= 0 {
+		return fmt.Errorf("group_id must be > 0")
+	}
+
+	now := time.Now().Unix()
+	_, err := d.SQL.Exec(`
+INSERT INTO currencies (
+  group_id, currency, name, decimal_places, status, created_at, updated_at
+)
+SELECT ?, currency, name, decimal_places, status, ?, ?
+  FROM currencies
+ WHERE group_id = 0;
+`, groupID, now, now)
+	if err != nil {
+		return fmt.Errorf("copy default currencies to group: %w", err)
 	}
 	return nil
 }

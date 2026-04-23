@@ -93,7 +93,7 @@ func Start(database *db.DB) error {
 		router.POST("/api/securities/delete/:id", securitiesCtl.PostDelete)
 		router.OPTIONS("/api/securities/delete/:id", securitiesCtl.Options)
 
-		currenciesCtl := controller.NewCurrenciesController(database, store, sessionName)
+		currenciesCtl := controller.NewCurrenciesController(database, store, sessionName, g)
 		router.GET("/api/currencies/list", currenciesCtl.GetList)
 		router.OPTIONS("/api/currencies/list", currenciesCtl.Options)
 		router.GET("/api/currencies/:id", currenciesCtl.GetByID)

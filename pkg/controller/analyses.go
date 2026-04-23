@@ -221,6 +221,44 @@ func (ct AnalysesController) currentSessionUserLocale(c *gin.Context) (string, b
 	return normalizeUserLocaleForController(u.Locale), true, nil
 }
 
+func parseAnalysisGroupID(c *gin.Context) (int64, bool) {
+	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("group_id")), 10, 64)
+	if err != nil || groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return 0, false
+	}
+	return groupID, true
+}
+
+func (ct AnalysesController) loadDecimalPlacesForBaseCurrency(groupID int64, baseCurrency string) (int32, bool) {
+	decimalPlaces := int32(2)
+	if baseCurrency == "" {
+		return decimalPlaces, true
+	}
+
+	currency, err := ct.DB.GetCurrencyByCurrencyAndGroupID(baseCurrency, groupID)
+	if err != nil {
+		return 0, false
+	}
+	if currency != nil {
+		decimalPlaces = int32(currency.DecimalPlaces)
+	}
+	return decimalPlaces, true
+}
+
+func (ct AnalysesController) ensureAnalysisGroupMember(c *gin.Context, userID, groupID int64) bool {
+	member, err := ct.DB.IsUserInGroup(groupID, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return false
+	}
+	if !member {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return false
+	}
+	return true
+}
+
 // GetDividendsByYear handles GET /api/analyses/dividends-by-year.
 func (ct AnalysesController) GetDividendsByYear(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
@@ -233,6 +271,13 @@ func (ct AnalysesController) GetDividendsByYear(c *gin.Context) {
 	userID, ok := ct.currentSessionUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	groupID, ok := parseAnalysisGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
 		return
 	}
 
@@ -268,16 +313,10 @@ func (ct AnalysesController) GetDividendsByYear(c *gin.Context) {
 		return
 	}
 
-	decimalPlaces := int32(2)
-	if baseCurrency != "" {
-		currency, err := ct.DB.GetCurrencyByCurrency(baseCurrency)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-			return
-		}
-		if currency != nil {
-			decimalPlaces = int32(currency.DecimalPlaces)
-		}
+	decimalPlaces, ok := ct.loadDecimalPlacesForBaseCurrency(groupID, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
 	}
 
 	depotIDs := make([]int64, 0, len(depots))
@@ -334,6 +373,13 @@ func (ct AnalysesController) GetDividendsByYearMonth(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
+	groupID, ok := parseAnalysisGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
+		return
+	}
 
 	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
@@ -367,16 +413,10 @@ func (ct AnalysesController) GetDividendsByYearMonth(c *gin.Context) {
 		return
 	}
 
-	decimalPlaces := int32(2)
-	if baseCurrency != "" {
-		currency, err := ct.DB.GetCurrencyByCurrency(baseCurrency)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-			return
-		}
-		if currency != nil {
-			decimalPlaces = int32(currency.DecimalPlaces)
-		}
+	decimalPlaces, ok := ct.loadDecimalPlacesForBaseCurrency(groupID, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
 	}
 
 	depotIDs := make([]int64, 0, len(depots))
@@ -433,6 +473,13 @@ func (ct AnalysesController) GetDividendsBySecurityYear(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
+	groupID, ok := parseAnalysisGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
+		return
+	}
 
 	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
@@ -472,16 +519,10 @@ func (ct AnalysesController) GetDividendsBySecurityYear(c *gin.Context) {
 		return
 	}
 
-	decimalPlaces := int32(2)
-	if baseCurrency != "" {
-		currency, err := ct.DB.GetCurrencyByCurrency(baseCurrency)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-			return
-		}
-		if currency != nil {
-			decimalPlaces = int32(currency.DecimalPlaces)
-		}
+	decimalPlaces, ok := ct.loadDecimalPlacesForBaseCurrency(groupID, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
 	}
 
 	depotIDs := make([]int64, 0, len(depots))
@@ -538,6 +579,13 @@ func (ct AnalysesController) GetDividendsByYearMonthSecurity(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
+	groupID, ok := parseAnalysisGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
+		return
+	}
 
 	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
@@ -577,16 +625,10 @@ func (ct AnalysesController) GetDividendsByYearMonthSecurity(c *gin.Context) {
 		return
 	}
 
-	decimalPlaces := int32(2)
-	if baseCurrency != "" {
-		currency, err := ct.DB.GetCurrencyByCurrency(baseCurrency)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-			return
-		}
-		if currency != nil {
-			decimalPlaces = int32(currency.DecimalPlaces)
-		}
+	decimalPlaces, ok := ct.loadDecimalPlacesForBaseCurrency(groupID, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
 	}
 
 	depotIDs := make([]int64, 0, len(depots))
@@ -643,6 +685,13 @@ func (ct AnalysesController) GetDividendsByYearChart(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
+	groupID, ok := parseAnalysisGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
+		return
+	}
 
 	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
@@ -682,16 +731,10 @@ func (ct AnalysesController) GetDividendsByYearChart(c *gin.Context) {
 		return
 	}
 
-	decimalPlaces := int32(2)
-	if baseCurrency != "" {
-		currency, err := ct.DB.GetCurrencyByCurrency(baseCurrency)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-			return
-		}
-		if currency != nil {
-			decimalPlaces = int32(currency.DecimalPlaces)
-		}
+	decimalPlaces, ok := ct.loadDecimalPlacesForBaseCurrency(groupID, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
 	}
 
 	depotIDs := make([]int64, 0, len(depots))
@@ -732,6 +775,13 @@ func (ct AnalysesController) GetDividendsByYearMonthChart(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
+	groupID, ok := parseAnalysisGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
+		return
+	}
 
 	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
@@ -771,16 +821,10 @@ func (ct AnalysesController) GetDividendsByYearMonthChart(c *gin.Context) {
 		return
 	}
 
-	decimalPlaces := int32(2)
-	if baseCurrency != "" {
-		currency, err := ct.DB.GetCurrencyByCurrency(baseCurrency)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-			return
-		}
-		if currency != nil {
-			decimalPlaces = int32(currency.DecimalPlaces)
-		}
+	decimalPlaces, ok := ct.loadDecimalPlacesForBaseCurrency(groupID, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
 	}
 
 	depotIDs := make([]int64, 0, len(depots))

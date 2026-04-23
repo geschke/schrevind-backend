@@ -78,6 +78,138 @@ VALUES (?, ?, ?);
 	return nil
 }
 
+// CreateGroupWithDefaultCurrencies creates a group and copies template currencies into it.
+func (d *DB) CreateGroupWithDefaultCurrencies(g *Group) error {
+	if d == nil || d.SQL == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	if g == nil {
+		return fmt.Errorf("group is nil")
+	}
+
+	normalized, err := normalizeGroup(*g)
+	if err != nil {
+		return err
+	}
+
+	tx, err := d.SQL.Begin()
+	if err != nil {
+		return fmt.Errorf("create group with default currencies: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.Exec(`
+INSERT INTO groups (name, created_at, updated_at)
+VALUES (?, ?, ?);
+`, normalized.Name, normalized.CreatedAt, normalized.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("create group with default currencies: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("create group with default currencies last_insert_id: %w", err)
+	}
+
+	now := time.Now().Unix()
+	if _, err := tx.Exec(`
+INSERT INTO currencies (
+  group_id, currency, name, decimal_places, status, created_at, updated_at
+)
+SELECT ?, currency, name, decimal_places, status, ?, ?
+  FROM currencies
+ WHERE group_id = 0;
+`, id, now, now); err != nil {
+		return fmt.Errorf("create group with default currencies: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("create group with default currencies commit: %w", err)
+	}
+
+	normalized.ID = id
+	normalized.UpdatedAt = now
+	*g = normalized
+	return nil
+}
+
+// CreateGroupWithDefaultCurrenciesAndAdmin creates a group, copies template currencies,
+// adds the creator to group_users, and grants the creator the group admin membership.
+func (d *DB) CreateGroupWithDefaultCurrenciesAndAdmin(g *Group, userID int64) error {
+	if d == nil || d.SQL == nil {
+		return fmt.Errorf("db not initialized")
+	}
+	if g == nil {
+		return fmt.Errorf("group is nil")
+	}
+	if userID <= 0 {
+		return fmt.Errorf("user_id must be > 0")
+	}
+
+	normalized, err := normalizeGroup(*g)
+	if err != nil {
+		return err
+	}
+
+	tx, err := d.SQL.Begin()
+	if err != nil {
+		return fmt.Errorf("create group with default currencies and admin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.Exec(`
+INSERT INTO groups (name, created_at, updated_at)
+VALUES (?, ?, ?);
+`, normalized.Name, normalized.CreatedAt, normalized.UpdatedAt)
+	if err != nil {
+		return fmt.Errorf("create group with default currencies and admin: %w", err)
+	}
+
+	id, err := res.LastInsertId()
+	if err != nil {
+		return fmt.Errorf("create group with default currencies and admin last_insert_id: %w", err)
+	}
+
+	now := time.Now().Unix()
+	if _, err := tx.Exec(`
+INSERT INTO currencies (
+  group_id, currency, name, decimal_places, status, created_at, updated_at
+)
+SELECT ?, currency, name, decimal_places, status, ?, ?
+  FROM currencies
+ WHERE group_id = 0;
+`, id, now, now); err != nil {
+		return fmt.Errorf("create group with default currencies and admin: %w", err)
+	}
+
+	if _, err := tx.Exec(`
+INSERT INTO group_users (group_id, user_id)
+VALUES (?, ?)
+ON CONFLICT(group_id, user_id) DO NOTHING;
+`, id, userID); err != nil {
+		return fmt.Errorf("create group with default currencies and admin: %w", err)
+	}
+
+	if _, err := tx.Exec(`
+INSERT INTO memberships (entity_type, entity_id, user_id, role, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(entity_type, entity_id, user_id) DO UPDATE SET
+  role = excluded.role,
+  updated_at = excluded.updated_at;
+`, EntityTypeGroup, id, userID, RoleGroupAdmin, now, now); err != nil {
+		return fmt.Errorf("create group with default currencies and admin: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("create group with default currencies and admin commit: %w", err)
+	}
+
+	normalized.ID = id
+	normalized.UpdatedAt = now
+	*g = normalized
+	return nil
+}
+
 // GetGroupByID returns data for the requested input.
 func (d *DB) GetGroupByID(id int64) (Group, bool, error) {
 	if d == nil || d.SQL == nil {

@@ -9,6 +9,7 @@ import (
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/cors"
 	"github.com/geschke/schrevind/pkg/db"
+	"github.com/geschke/schrevind/pkg/grrt"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
 )
@@ -17,14 +18,16 @@ type CurrenciesController struct {
 	DB          *db.DB
 	Store       sessions.Store
 	SessionName string
+	G           *grrt.Grrt
 }
 
 // NewCurrenciesController constructs and returns a new instance.
-func NewCurrenciesController(database *db.DB, store sessions.Store, sessionName string) *CurrenciesController {
+func NewCurrenciesController(database *db.DB, store sessions.Store, sessionName string, g *grrt.Grrt) *CurrenciesController {
 	return &CurrenciesController{
 		DB:          database,
 		Store:       store,
 		SessionName: sessionName,
+		G:           g,
 	}
 }
 
@@ -34,6 +37,7 @@ func (ct CurrenciesController) Options(c *gin.Context) {
 }
 
 type addCurrencyRequest struct {
+	GroupID       int64  `json:"GroupID"`
 	Currency      string `json:"Currency"`
 	Name          string `json:"Name"`
 	DecimalPlaces *int64 `json:"DecimalPlaces"`
@@ -41,10 +45,15 @@ type addCurrencyRequest struct {
 }
 
 type updateCurrencyRequest struct {
+	GroupID       int64   `json:"GroupID"`
 	Currency      *string `json:"Currency"`
 	Name          *string `json:"Name"`
 	DecimalPlaces *int64  `json:"DecimalPlaces"`
 	Status        *string `json:"Status"`
+}
+
+type deleteCurrencyRequest struct {
+	GroupID int64 `json:"GroupID"`
 }
 
 // ensureAuthorized performs its package-specific operation.
@@ -71,6 +80,23 @@ func (ct CurrenciesController) ensureAuthorized(c *gin.Context) bool {
 	return true
 }
 
+// currentSessionUserID returns the authenticated user ID from the current session.
+func (ct CurrenciesController) currentSessionUserID(c *gin.Context) (int64, bool) {
+	sess, _ := ct.Store.Get(c.Request, ct.SessionName)
+	if sess == nil {
+		return 0, false
+	}
+	raw, ok := sess.Values["id"]
+	if !ok {
+		return 0, false
+	}
+	id, ok := raw.(int64)
+	if !ok {
+		return 0, false
+	}
+	return id, true
+}
+
 // parseCurrencyID performs its package-specific operation.
 func parseCurrencyID(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("id")), 10, 64)
@@ -79,6 +105,16 @@ func parseCurrencyID(c *gin.Context) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+// parseGroupIDQuery parses and validates the group_id query parameter.
+func parseGroupIDQuery(c *gin.Context) (int64, bool) {
+	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("group_id")), 10, 64)
+	if err != nil || groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return 0, false
+	}
+	return groupID, true
 }
 
 // isValidCurrencyStatus performs its package-specific operation.
@@ -100,12 +136,17 @@ func isValidCurrencyStatusFilter(status string) bool {
 }
 
 // parseCurrencyListParams performs its package-specific operation.
-func parseCurrencyListParams(c *gin.Context) (int, int, string, string, error) {
+func parseCurrencyListParams(c *gin.Context) (int64, int, int, string, string, error) {
+	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("group_id")), 10, 64)
+	if err != nil || groupID <= 0 {
+		return 0, 0, 0, "", "", errors.New("INVALID_GROUP_ID")
+	}
+
 	limit := 10
 	if v := strings.TrimSpace(c.Query("limit")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > 100 {
-			return 0, 0, "", "", errors.New("INVALID_LIMIT")
+			return 0, 0, 0, "", "", errors.New("INVALID_LIMIT")
 		}
 		limit = n
 	}
@@ -114,7 +155,7 @@ func parseCurrencyListParams(c *gin.Context) (int, int, string, string, error) {
 	if v := strings.TrimSpace(c.Query("offset")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			return 0, 0, "", "", errors.New("INVALID_OFFSET")
+			return 0, 0, 0, "", "", errors.New("INVALID_OFFSET")
 		}
 		offset = n
 	}
@@ -125,16 +166,16 @@ func parseCurrencyListParams(c *gin.Context) (int, int, string, string, error) {
 		case "Currency", "Name", "DecimalPlaces":
 			sortBy = v
 		default:
-			return 0, 0, "", "", errors.New("INVALID_SORT")
+			return 0, 0, 0, "", "", errors.New("INVALID_SORT")
 		}
 	}
 
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
 	if !isValidCurrencyStatusFilter(status) {
-		return 0, 0, "", "", errors.New("INVALID_STATUS_FILTER")
+		return 0, 0, 0, "", "", errors.New("INVALID_STATUS_FILTER")
 	}
 
-	return limit, offset, sortBy, status, nil
+	return groupID, limit, offset, sortBy, status, nil
 }
 
 // isValidCurrencyCode performs its package-specific operation.
@@ -152,6 +193,10 @@ func isValidCurrencyCode(value string) bool {
 
 // normalizeCurrencyPayload performs its package-specific operation.
 func normalizeCurrencyPayload(item db.Currency) (db.Currency, string) {
+	if item.GroupID <= 0 {
+		return item, "INVALID_GROUP_ID"
+	}
+
 	item.Currency = strings.ToUpper(strings.TrimSpace(item.Currency))
 	item.Name = strings.TrimSpace(item.Name)
 	item.Status = strings.ToLower(strings.TrimSpace(item.Status))
@@ -172,6 +217,20 @@ func normalizeCurrencyPayload(item db.Currency) (db.Currency, string) {
 	return item, ""
 }
 
+// ensureGroupMember requires that the current user belongs to the requested group.
+func (ct CurrenciesController) ensureGroupMember(c *gin.Context, userID, groupID int64) bool {
+	member, err := ct.DB.IsUserInGroup(groupID, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return false
+	}
+	if !member {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return false
+	}
+	return true
+}
+
 // GET /api/currencies/list
 func (ct CurrenciesController) GetList(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
@@ -181,19 +240,29 @@ func (ct CurrenciesController) GetList(c *gin.Context) {
 		return
 	}
 
-	limit, offset, sortBy, status, err := parseCurrencyListParams(c)
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	groupID, limit, offset, sortBy, status, err := parseCurrencyListParams(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 
-	items, err := ct.DB.ListCurrencies(limit, offset, sortBy, status)
+	if !ct.ensureGroupMember(c, userID, groupID) {
+		return
+	}
+
+	items, err := ct.DB.ListCurrenciesByGroupID(groupID, limit, offset, sortBy, status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 
-	count, err := ct.DB.CountCurrencies(status)
+	count, err := ct.DB.CountCurrenciesByGroupID(groupID, status)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -215,12 +284,27 @@ func (ct CurrenciesController) GetByID(c *gin.Context) {
 		return
 	}
 
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
 	currencyID, ok := parseCurrencyID(c)
 	if !ok {
 		return
 	}
 
-	item, err := ct.DB.GetCurrencyByID(currencyID)
+	groupID, ok := parseGroupIDQuery(c)
+	if !ok {
+		return
+	}
+
+	if !ct.ensureGroupMember(c, userID, groupID) {
+		return
+	}
+
+	item, err := ct.DB.GetCurrencyByIDAndGroupID(currencyID, groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -245,6 +329,12 @@ func (ct CurrenciesController) PostAdd(c *gin.Context) {
 		return
 	}
 
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
 	var req addCurrencyRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
@@ -257,6 +347,7 @@ func (ct CurrenciesController) PostAdd(c *gin.Context) {
 	}
 
 	item, message := normalizeCurrencyPayload(db.Currency{
+		GroupID:       req.GroupID,
 		Currency:      req.Currency,
 		Name:          req.Name,
 		DecimalPlaces: decimalPlaces,
@@ -267,7 +358,11 @@ func (ct CurrenciesController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	existing, err := ct.DB.GetCurrencyByCurrency(item.Currency)
+	if !ct.ensureGroupMember(c, userID, item.GroupID) {
+		return
+	}
+
+	existing, err := ct.DB.GetCurrencyByCurrencyAndGroupID(item.Currency, item.GroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -297,12 +392,32 @@ func (ct CurrenciesController) PostUpdate(c *gin.Context) {
 		return
 	}
 
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
 	currencyID, ok := parseCurrencyID(c)
 	if !ok {
 		return
 	}
 
-	existing, err := ct.DB.GetCurrencyByID(currencyID)
+	var req updateCurrencyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.GroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	if !ct.ensureGroupMember(c, userID, req.GroupID) {
+		return
+	}
+
+	existing, err := ct.DB.GetCurrencyByIDAndGroupID(currencyID, req.GroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -312,13 +427,8 @@ func (ct CurrenciesController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	var req updateCurrencyRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
-		return
-	}
-
 	updated := *existing
+	updated.GroupID = req.GroupID
 	if req.Currency != nil {
 		updated.Currency = *req.Currency
 	}
@@ -338,7 +448,7 @@ func (ct CurrenciesController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	other, err := ct.DB.GetCurrencyByCurrency(updated.Currency)
+	other, err := ct.DB.GetCurrencyByCurrencyAndGroupID(updated.Currency, updated.GroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -368,12 +478,28 @@ func (ct CurrenciesController) PostDelete(c *gin.Context) {
 		return
 	}
 
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
 	currencyID, ok := parseCurrencyID(c)
 	if !ok {
 		return
 	}
 
-	item, err := ct.DB.GetCurrencyByID(currencyID)
+	var req deleteCurrencyRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.GroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	item, err := ct.DB.GetCurrencyByIDAndGroupID(currencyID, req.GroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -383,7 +509,17 @@ func (ct CurrenciesController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	if err := ct.DB.DeleteCurrency(currencyID); err != nil {
+	allowed, err := ct.G.CanDo(userID, db.EntityTypeGroup, "currency:delete", req.GroupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	if err := ct.DB.DeleteCurrencyByIDAndGroupID(currencyID, req.GroupID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}

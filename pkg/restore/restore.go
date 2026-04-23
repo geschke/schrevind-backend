@@ -152,9 +152,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 	// 6. Insert currencies.
 	for _, c := range doc.Data.Currencies {
 		if _, err := tx.Exec(`
-INSERT INTO currencies (id, currency, name, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?);
-`, c.ID, c.Currency, c.Name, c.Status, c.CreatedAt, c.UpdatedAt); err != nil {
+INSERT INTO currencies (id, group_id, currency, name, decimal_places, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+`, c.ID, c.GroupID, c.Currency, c.Name, c.DecimalPlaces, c.Status, c.CreatedAt, c.UpdatedAt); err != nil {
 			return fmt.Errorf("IMPORT_FAILED: insert currency id=%d: %w", c.ID, err)
 		}
 	}

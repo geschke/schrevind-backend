@@ -221,7 +221,7 @@ func (ct GroupsController) PostAdd(c *gin.Context) {
 	}
 
 	item := db.Group{Name: name}
-	if err := ct.DB.CreateGroup(&item); err != nil {
+	if err := ct.DB.CreateGroupWithDefaultCurrenciesAndAdmin(&item, sessionUserID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}

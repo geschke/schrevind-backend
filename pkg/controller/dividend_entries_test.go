@@ -8,6 +8,8 @@ import (
 	"github.com/geschke/schrevind/pkg/validate"
 )
 
+const testCurrencyGroupID = int64(1)
+
 func validDividendEntryPayloadForValidation() db.DividendEntry {
 	return db.DividendEntry{
 		DepotID:                            1,
@@ -70,7 +72,7 @@ func TestValidateDividendEntryCurrencyPairsAcceptsKnownCurrencies(t *testing.T) 
 	entry := validDividendEntryPayloadForValidation()
 	errors := fieldErrors{}
 
-	if err := validateDividendEntryCurrencyPairs(database, &entry, errors); err != nil {
+	if err := validateDividendEntryCurrencyPairs(database, testCurrencyGroupID, &entry, errors); err != nil {
 		t.Fatalf("validateDividendEntryCurrencyPairs() error = %v", err)
 	}
 	if len(errors) > 0 {
@@ -89,7 +91,7 @@ func TestValidateDividendEntryCurrencyPairsCollectsFieldErrors(t *testing.T) {
 	entry.ForeignFeesCurrency = ""
 	errors := fieldErrors{}
 
-	if err := validateDividendEntryCurrencyPairs(database, &entry, errors); err != nil {
+	if err := validateDividendEntryCurrencyPairs(database, testCurrencyGroupID, &entry, errors); err != nil {
 		t.Fatalf("validateDividendEntryCurrencyPairs() error = %v", err)
 	}
 
@@ -117,7 +119,7 @@ func TestValidateDividendEntryFXRateDefaultsEmptyLabel(t *testing.T) {
 			entry.FXRate = tt.rate
 			errors := fieldErrors{}
 
-			if err := validateDividendEntryFXRate(database, &entry, errors); err != nil {
+			if err := validateDividendEntryFXRate(database, testCurrencyGroupID, &entry, errors); err != nil {
 				t.Fatalf("validateDividendEntryFXRate() error = %v", err)
 			}
 			if len(errors) > 0 {
@@ -136,7 +138,7 @@ func TestValidateDividendEntryFXRateAcceptsValidLabel(t *testing.T) {
 	entry.FXRate = "1,1234"
 	errors := fieldErrors{}
 
-	if err := validateDividendEntryFXRate(database, &entry, errors); err != nil {
+	if err := validateDividendEntryFXRate(database, testCurrencyGroupID, &entry, errors); err != nil {
 		t.Fatalf("validateDividendEntryFXRate() error = %v", err)
 	}
 	if len(errors) > 0 {
@@ -168,7 +170,7 @@ func TestValidateDividendEntryFXRateCollectsFieldErrors(t *testing.T) {
 			entry.FXRate = tt.rate
 			errors := fieldErrors{}
 
-			if err := validateDividendEntryFXRate(database, &entry, errors); err != nil {
+			if err := validateDividendEntryFXRate(database, testCurrencyGroupID, &entry, errors); err != nil {
 				t.Fatalf("validateDividendEntryFXRate() error = %v", err)
 			}
 			assertFieldError(t, errors, tt.field, tt.want)
@@ -189,7 +191,7 @@ func TestPrepareCalculatedDividendFieldsUsesGrossAmountForBaseCurrency(t *testin
 	entry.FXRate = "1"
 	errors := fieldErrors{}
 
-	if err := prepareCalculatedDividendFields(database, &entry, errors); err != nil {
+	if err := prepareCalculatedDividendFields(database, testCurrencyGroupID, &entry, errors); err != nil {
 		t.Fatalf("prepareCalculatedDividendFields() error = %v", err)
 	}
 	if len(errors) > 0 {
@@ -213,7 +215,7 @@ func TestPrepareCalculatedDividendFieldsConvertsAndSubtractsWithholding(t *testi
 	entry.FXRate = "1.1"
 	errors := fieldErrors{}
 
-	if err := prepareCalculatedDividendFields(database, &entry, errors); err != nil {
+	if err := prepareCalculatedDividendFields(database, testCurrencyGroupID, &entry, errors); err != nil {
 		t.Fatalf("prepareCalculatedDividendFields() error = %v", err)
 	}
 	if len(errors) > 0 {
@@ -237,7 +239,7 @@ func TestPrepareCalculatedDividendFieldsConvertsForwardPair(t *testing.T) {
 	entry.FXRate = "1.1"
 	errors := fieldErrors{}
 
-	if err := prepareCalculatedDividendFields(database, &entry, errors); err != nil {
+	if err := prepareCalculatedDividendFields(database, testCurrencyGroupID, &entry, errors); err != nil {
 		t.Fatalf("prepareCalculatedDividendFields() error = %v", err)
 	}
 	if len(errors) > 0 {
@@ -261,7 +263,7 @@ func TestPrepareCalculatedDividendFieldsRoundsToBaseCurrencyDecimalPlaces(t *tes
 	entry.FXRate = "1.18700"
 	errors := fieldErrors{}
 
-	if err := prepareCalculatedDividendFields(database, &entry, errors); err != nil {
+	if err := prepareCalculatedDividendFields(database, testCurrencyGroupID, &entry, errors); err != nil {
 		t.Fatalf("prepareCalculatedDividendFields() error = %v", err)
 	}
 	if len(errors) > 0 {
@@ -286,7 +288,7 @@ func TestPrepareCalculatedDividendFieldsReportsPairMismatch(t *testing.T) {
 	entry.FXRate = "1.1"
 	errors := fieldErrors{}
 
-	if err := prepareCalculatedDividendFields(database, &entry, errors); err != nil {
+	if err := prepareCalculatedDividendFields(database, testCurrencyGroupID, &entry, errors); err != nil {
 		t.Fatalf("prepareCalculatedDividendFields() error = %v", err)
 	}
 
@@ -304,6 +306,9 @@ func newCurrencyValidationTestDB(t *testing.T) *db.DB {
 
 	if err := database.Migrate(); err != nil {
 		t.Fatalf("migrate test db: %v", err)
+	}
+	if err := database.CopyDefaultCurrenciesToGroup(testCurrencyGroupID); err != nil {
+		t.Fatalf("copy default currencies to test group: %v", err)
 	}
 
 	return database
@@ -327,6 +332,7 @@ func createCalculationTestCurrency(t *testing.T, database *db.DB, currency strin
 	t.Helper()
 
 	item := db.Currency{
+		GroupID:  testCurrencyGroupID,
 		Currency: currency,
 		Name:     currency,
 		Status:   db.CurrencyStatusActive,

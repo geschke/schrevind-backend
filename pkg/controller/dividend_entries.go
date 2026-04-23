@@ -40,6 +40,7 @@ func (ct DividendEntriesController) Options(c *gin.Context) {
 }
 
 type addDividendEntryRequest struct {
+	GroupID    int64  `json:"GroupID"`
 	DepotID    int64  `json:"DepotID"`
 	SecurityID int64  `json:"SecurityID"`
 	PayDate    string `json:"PayDate"`
@@ -83,6 +84,7 @@ type addDividendEntryRequest struct {
 }
 
 type updateDividendEntryRequest struct {
+	GroupID    *int64  `json:"GroupID"`
 	DepotID    *int64  `json:"DepotID"`
 	SecurityID *int64  `json:"SecurityID"`
 	PayDate    *string `json:"PayDate"`
@@ -361,7 +363,7 @@ func isStrictCurrencyCode(value string) bool {
 }
 
 // validateDividendEntryCurrencyPairs validates amount/currency pairs and known currency codes.
-func validateDividendEntryCurrencyPairs(database *db.DB, entry *db.DividendEntry, errors fieldErrors) error {
+func validateDividendEntryCurrencyPairs(database *db.DB, groupID int64, entry *db.DividendEntry, errors fieldErrors) error {
 	rules := []amountCurrencyPairRule{
 		{AmountFieldName: "DividendPerUnitAmount", CurrencyFieldName: "DividendPerUnitCurrency", Amount: &entry.DividendPerUnitAmount, Currency: &entry.DividendPerUnitCurrency},
 		{AmountFieldName: "GrossAmount", CurrencyFieldName: "GrossCurrency", Amount: &entry.GrossAmount, Currency: &entry.GrossCurrency},
@@ -406,7 +408,7 @@ func validateDividendEntryCurrencyPairs(database *db.DB, entry *db.DividendEntry
 			continue
 		}
 
-		item, err := database.GetCurrencyByCurrency(currency)
+		item, err := database.GetCurrencyByCurrencyAndGroupID(currency, groupID)
 		if err != nil {
 			return err
 		}
@@ -420,7 +422,7 @@ func validateDividendEntryCurrencyPairs(database *db.DB, entry *db.DividendEntry
 }
 
 // validateDividendEntryFXRate validates FXRateLabel/FXRate and normalizes the default rate.
-func validateDividendEntryFXRate(database *db.DB, entry *db.DividendEntry, errors fieldErrors) error {
+func validateDividendEntryFXRate(database *db.DB, groupID int64, entry *db.DividendEntry, errors fieldErrors) error {
 	entry.FXRateLabel = strings.TrimSpace(entry.FXRateLabel)
 	entry.FXRate = strings.TrimSpace(entry.FXRate)
 
@@ -447,13 +449,13 @@ func validateDividendEntryFXRate(database *db.DB, entry *db.DividendEntry, error
 		return nil
 	}
 
-	if known, err := isKnownCurrency(database, left); err != nil {
+	if known, err := isKnownCurrency(database, groupID, left); err != nil {
 		return err
 	} else if !known {
 		errors["FXRateLabel"] = errFXRateLabelUnknownCurrency
 		return nil
 	}
-	if known, err := isKnownCurrency(database, right); err != nil {
+	if known, err := isKnownCurrency(database, groupID, right); err != nil {
 		return err
 	} else if !known {
 		errors["FXRateLabel"] = errFXRateLabelUnknownCurrency
@@ -478,8 +480,8 @@ func parseFXRateLabel(label string) (string, string, bool) {
 }
 
 // isKnownCurrency reports whether a currency code exists in the currencies table.
-func isKnownCurrency(database *db.DB, currency string) (bool, error) {
-	item, err := database.GetCurrencyByCurrency(currency)
+func isKnownCurrency(database *db.DB, groupID int64, currency string) (bool, error) {
+	item, err := database.GetCurrencyByCurrencyAndGroupID(currency, groupID)
 	if err != nil {
 		return false, err
 	}
@@ -548,7 +550,7 @@ func normalizeDividendEntryPayload(entry db.DividendEntry) (db.DividendEntry, fi
 }
 
 // prepareCalculatedDividendFields calculates backend-owned base-currency amount fields.
-func prepareCalculatedDividendFields(database *db.DB, entry *db.DividendEntry, errors fieldErrors) error {
+func prepareCalculatedDividendFields(database *db.DB, groupID int64, entry *db.DividendEntry, errors fieldErrors) error {
 	depot, found, err := database.GetDepotByID(entry.DepotID)
 	if err != nil {
 		return err
@@ -567,7 +569,7 @@ func prepareCalculatedDividendFields(database *db.DB, entry *db.DividendEntry, e
 		errors["DepotID"] = errCurrencyInvalidFormat
 		return nil
 	}
-	baseCurrencyItem, err := database.GetCurrencyByCurrency(baseCurrency)
+	baseCurrencyItem, err := database.GetCurrencyByCurrencyAndGroupID(baseCurrency, groupID)
 	if err != nil {
 		return err
 	}
@@ -972,11 +974,25 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		ForeignFeesCurrency:                    req.ForeignFeesCurrency,
 		Note:                                   req.Note,
 	})
-	if err := validateDividendEntryCurrencyPairs(ct.DB, &entry, fieldErrors); err != nil {
+	if req.GroupID <= 0 {
+		fieldErrors["GroupID"] = "INVALID_GROUP_ID"
+		writeFieldErrors(c, fieldErrors)
+		return
+	}
+	inGroup, err := ct.DB.IsUserInGroup(req.GroupID, sessionUserID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if err := validateDividendEntryFXRate(ct.DB, &entry, fieldErrors); err != nil {
+	if !inGroup {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+	if err := validateDividendEntryCurrencyPairs(ct.DB, req.GroupID, &entry, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if err := validateDividendEntryFXRate(ct.DB, req.GroupID, &entry, fieldErrors); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
@@ -995,7 +1011,7 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	if err := prepareCalculatedDividendFields(ct.DB, &entry, fieldErrors); err != nil {
+	if err := prepareCalculatedDividendFields(ct.DB, req.GroupID, &entry, fieldErrors); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
@@ -1071,6 +1087,10 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 	updated := existing
 	if req.DepotID != nil {
 		updated.DepotID = *req.DepotID
+	}
+	groupID := int64(0)
+	if req.GroupID != nil {
+		groupID = *req.GroupID
 	}
 	if req.SecurityID != nil {
 		updated.SecurityID = *req.SecurityID
@@ -1155,11 +1175,25 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 	}
 
 	updated, fieldErrors := normalizeDividendEntryPayload(updated)
-	if err := validateDividendEntryCurrencyPairs(ct.DB, &updated, fieldErrors); err != nil {
+	if groupID <= 0 {
+		fieldErrors["GroupID"] = "INVALID_GROUP_ID"
+		writeFieldErrors(c, fieldErrors)
+		return
+	}
+	inGroup, err := ct.DB.IsUserInGroup(groupID, sessionUserID)
+	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if err := validateDividendEntryFXRate(ct.DB, &updated, fieldErrors); err != nil {
+	if !inGroup {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+	if err := validateDividendEntryCurrencyPairs(ct.DB, groupID, &updated, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if err := validateDividendEntryFXRate(ct.DB, groupID, &updated, fieldErrors); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
@@ -1168,7 +1202,7 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	if err := prepareCalculatedDividendFields(ct.DB, &updated, fieldErrors); err != nil {
+	if err := prepareCalculatedDividendFields(ct.DB, groupID, &updated, fieldErrors); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
