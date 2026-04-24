@@ -45,8 +45,8 @@ type updateGroupRequest struct {
 }
 
 type groupMemberAddRequest struct {
-	GroupID int64                `json:"GroupID"`
-	Members []groupMemberAddItem `json:"members"`
+	ContextGroupID int64                `json:"ContextGroupID"`
+	Members        []groupMemberAddItem `json:"members"`
 }
 
 type groupMemberAddItem struct {
@@ -55,8 +55,8 @@ type groupMemberAddItem struct {
 }
 
 type groupMemberRemoveRequest struct {
-	GroupID int64   `json:"GroupID"`
-	UserIDs []int64 `json:"UserIDs"`
+	ContextGroupID int64   `json:"ContextGroupID"`
+	UserIDs        []int64 `json:"UserIDs"`
 }
 
 // ensureAuthorized performs its package-specific operation.
@@ -537,7 +537,7 @@ func (ct GroupsController) PostMemberAdd(c *gin.Context) {
 		return
 	}
 
-	if !ct.ensureMemberActionContext(c, sessionUserID, req.GroupID, "member:add") {
+	if !ct.ensureMemberActionContext(c, sessionUserID, req.ContextGroupID, "member:add") {
 		return
 	}
 
@@ -670,7 +670,7 @@ func (ct GroupsController) PostMemberRemove(c *gin.Context) {
 		return
 	}
 
-	if !ct.ensureMemberActionContext(c, sessionUserID, req.GroupID, "member:remove") {
+	if !ct.ensureMemberActionContext(c, sessionUserID, req.ContextGroupID, "member:remove") {
 		return
 	}
 

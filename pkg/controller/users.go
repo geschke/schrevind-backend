@@ -41,15 +41,15 @@ func (ct UsersController) Options(c *gin.Context) {
 }
 
 type updateUserRequest struct {
-	GroupID   int64   `json:"GroupID"`
-	Email     *string `json:"Email"`
-	FirstName *string `json:"FirstName"`
-	LastName  *string `json:"LastName"`
-	Locale    *string `json:"Locale"`
+	ContextGroupID int64   `json:"ContextGroupID"`
+	Email          *string `json:"Email"`
+	FirstName      *string `json:"FirstName"`
+	LastName       *string `json:"LastName"`
+	Locale         *string `json:"Locale"`
 }
 
 type addUserRequest struct {
-	GroupID         int64  `json:"GroupID"`
+	ContextGroupID  int64  `json:"ContextGroupID"`
 	Email           string `json:"Email"`
 	Password        string `json:"Password"`
 	PasswordConfirm string `json:"PasswordConfirm"`
@@ -59,13 +59,13 @@ type addUserRequest struct {
 }
 
 type updatePasswordRequest struct {
-	GroupID           int64  `json:"GroupID"`
+	ContextGroupID    int64  `json:"ContextGroupID"`
 	Password          string `json:"Password"`
 	PasswordDuplicate string `json:"PasswordDuplicate"`
 }
 
 type deleteUserRequest struct {
-	GroupID int64 `json:"GroupID"`
+	ContextGroupID int64 `json:"ContextGroupID"`
 }
 
 // ensureAuthorized performs its package-specific operation.
@@ -263,7 +263,7 @@ func (ct UsersController) PostUpdate(c *gin.Context) {
 
 	// A user may always edit their own profile; otherwise requires user:edit permission.
 	if id != sessionUserID {
-		allowed, err := ct.canManageUser(sessionUserID, "user:edit", req.GroupID)
+		allowed, err := ct.canManageUser(sessionUserID, "user:edit", req.ContextGroupID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
@@ -382,7 +382,7 @@ func (ct UsersController) PostUpdatePassword(c *gin.Context) {
 
 	// A user may always change their own password; otherwise requires user:edit permission.
 	if id != sessionUserID {
-		allowed, err := ct.canManageUser(sessionUserID, "user:edit", req.GroupID)
+		allowed, err := ct.canManageUser(sessionUserID, "user:edit", req.ContextGroupID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
@@ -472,12 +472,12 @@ func (ct UsersController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	if req.GroupID <= 0 {
+	if req.ContextGroupID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
 		return
 	}
 
-	allowed, err := ct.canManageUser(sessionUserID, "user:create", req.GroupID)
+	allowed, err := ct.canManageUser(sessionUserID, "user:create", req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -545,8 +545,8 @@ func (ct UsersController) PostAdd(c *gin.Context) {
 
 	// Do not auto-assign to the system group — that is a privilege context,
 	// not an organisational one. The system admin must add the user explicitly.
-	if req.GroupID != db.SystemGroupID {
-		if _, err := ct.DB.AddUserToGroup(req.GroupID, newID); err != nil {
+	if req.ContextGroupID != db.SystemGroupID {
+		if _, err := ct.DB.AddUserToGroup(req.ContextGroupID, newID); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
 		}
@@ -601,7 +601,7 @@ func (ct UsersController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.canManageUser(sessionUserID, "user:delete", req.GroupID)
+	allowed, err := ct.canManageUser(sessionUserID, "user:delete", req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

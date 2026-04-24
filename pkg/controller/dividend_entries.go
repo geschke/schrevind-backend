@@ -40,11 +40,11 @@ func (ct DividendEntriesController) Options(c *gin.Context) {
 }
 
 type addDividendEntryRequest struct {
-	GroupID    int64  `json:"GroupID"`
-	DepotID    int64  `json:"DepotID"`
-	SecurityID int64  `json:"SecurityID"`
-	PayDate    string `json:"PayDate"`
-	ExDate     string `json:"ExDate"`
+	ContextGroupID int64  `json:"ContextGroupID"`
+	DepotID        int64  `json:"DepotID"`
+	SecurityID     int64  `json:"SecurityID"`
+	PayDate        string `json:"PayDate"`
+	ExDate         string `json:"ExDate"`
 
 	SecurityName   string `json:"SecurityName"`
 	SecurityISIN   string `json:"SecurityISIN"`
@@ -84,11 +84,11 @@ type addDividendEntryRequest struct {
 }
 
 type updateDividendEntryRequest struct {
-	GroupID    *int64  `json:"GroupID"`
-	DepotID    *int64  `json:"DepotID"`
-	SecurityID *int64  `json:"SecurityID"`
-	PayDate    *string `json:"PayDate"`
-	ExDate     *string `json:"ExDate"`
+	ContextGroupID *int64  `json:"ContextGroupID"`
+	DepotID        *int64  `json:"DepotID"`
+	SecurityID     *int64  `json:"SecurityID"`
+	PayDate        *string `json:"PayDate"`
+	ExDate         *string `json:"ExDate"`
 
 	SecurityName   *string `json:"SecurityName"`
 	SecurityISIN   *string `json:"SecurityISIN"`
@@ -974,12 +974,12 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		ForeignFeesCurrency:                    req.ForeignFeesCurrency,
 		Note:                                   req.Note,
 	})
-	if req.GroupID <= 0 {
-		fieldErrors["GroupID"] = "INVALID_GROUP_ID"
+	if req.ContextGroupID <= 0 {
+		fieldErrors["ContextGroupID"] = "INVALID_GROUP_ID"
 		writeFieldErrors(c, fieldErrors)
 		return
 	}
-	inGroup, err := ct.DB.IsUserInGroup(req.GroupID, sessionUserID)
+	inGroup, err := ct.DB.IsUserInGroup(req.ContextGroupID, sessionUserID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -988,11 +988,11 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return
 	}
-	if err := validateDividendEntryCurrencyPairs(ct.DB, req.GroupID, &entry, fieldErrors); err != nil {
+	if err := validateDividendEntryCurrencyPairs(ct.DB, req.ContextGroupID, &entry, fieldErrors); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if err := validateDividendEntryFXRate(ct.DB, req.GroupID, &entry, fieldErrors); err != nil {
+	if err := validateDividendEntryFXRate(ct.DB, req.ContextGroupID, &entry, fieldErrors); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
@@ -1011,7 +1011,7 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	if err := prepareCalculatedDividendFields(ct.DB, req.GroupID, &entry, fieldErrors); err != nil {
+	if err := prepareCalculatedDividendFields(ct.DB, req.ContextGroupID, &entry, fieldErrors); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
@@ -1089,8 +1089,8 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 		updated.DepotID = *req.DepotID
 	}
 	groupID := int64(0)
-	if req.GroupID != nil {
-		groupID = *req.GroupID
+	if req.ContextGroupID != nil {
+		groupID = *req.ContextGroupID
 	}
 	if req.SecurityID != nil {
 		updated.SecurityID = *req.SecurityID
@@ -1176,7 +1176,7 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 
 	updated, fieldErrors := normalizeDividendEntryPayload(updated)
 	if groupID <= 0 {
-		fieldErrors["GroupID"] = "INVALID_GROUP_ID"
+		fieldErrors["ContextGroupID"] = "INVALID_GROUP_ID"
 		writeFieldErrors(c, fieldErrors)
 		return
 	}

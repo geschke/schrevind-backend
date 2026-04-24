@@ -36,15 +36,15 @@ func (ct DepotsController) Options(c *gin.Context) {
 }
 
 type addDepotRequest struct {
-	// GroupID is used only for the permission check (depot:create requires group admin).
+	// ContextGroupID is used only for the permission check (depot:create requires group admin).
 	// It is not stored on the depot itself.
-	GroupID       int64  `json:"GroupID"`
-	Name          string `json:"Name"`
-	BrokerName    string `json:"BrokerName"`
-	AccountNumber string `json:"AccountNumber"`
-	BaseCurrency  string `json:"BaseCurrency"`
-	Description   string `json:"Description"`
-	Status        string `json:"Status"`
+	ContextGroupID int64  `json:"ContextGroupID"`
+	Name           string `json:"Name"`
+	BrokerName     string `json:"BrokerName"`
+	AccountNumber  string `json:"AccountNumber"`
+	BaseCurrency   string `json:"BaseCurrency"`
+	Description    string `json:"Description"`
+	Status         string `json:"Status"`
 }
 
 type updateDepotRequest struct {
@@ -261,12 +261,12 @@ func (ct DepotsController) PostAdd(c *gin.Context) {
 		return
 	}
 	// todo error handling... user is in > 1 groups. primary group? choose groups?
-	if req.GroupID <= 0 {
+	if req.ContextGroupID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "depot:create", req.GroupID)
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "depot:create", req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

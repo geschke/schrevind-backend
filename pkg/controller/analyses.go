@@ -221,8 +221,8 @@ func (ct AnalysesController) currentSessionUserLocale(c *gin.Context) (string, b
 	return normalizeUserLocaleForController(u.Locale), true, nil
 }
 
-func parseAnalysisGroupID(c *gin.Context) (int64, bool) {
-	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("group_id")), 10, 64)
+func parseAnalysisContextGroupID(c *gin.Context) (int64, bool) {
+	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("context_group_id")), 10, 64)
 	if err != nil || groupID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
 		return 0, false
@@ -273,7 +273,7 @@ func (ct AnalysesController) GetDividendsByYear(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
-	groupID, ok := parseAnalysisGroupID(c)
+	groupID, ok := parseAnalysisContextGroupID(c)
 	if !ok {
 		return
 	}
@@ -373,7 +373,7 @@ func (ct AnalysesController) GetDividendsByYearMonth(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
-	groupID, ok := parseAnalysisGroupID(c)
+	groupID, ok := parseAnalysisContextGroupID(c)
 	if !ok {
 		return
 	}
@@ -473,7 +473,7 @@ func (ct AnalysesController) GetDividendsBySecurityYear(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
-	groupID, ok := parseAnalysisGroupID(c)
+	groupID, ok := parseAnalysisContextGroupID(c)
 	if !ok {
 		return
 	}
@@ -579,7 +579,7 @@ func (ct AnalysesController) GetDividendsByYearMonthSecurity(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
-	groupID, ok := parseAnalysisGroupID(c)
+	groupID, ok := parseAnalysisContextGroupID(c)
 	if !ok {
 		return
 	}
@@ -685,7 +685,7 @@ func (ct AnalysesController) GetDividendsByYearChart(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
-	groupID, ok := parseAnalysisGroupID(c)
+	groupID, ok := parseAnalysisContextGroupID(c)
 	if !ok {
 		return
 	}
@@ -775,7 +775,7 @@ func (ct AnalysesController) GetDividendsByYearMonthChart(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
-	groupID, ok := parseAnalysisGroupID(c)
+	groupID, ok := parseAnalysisContextGroupID(c)
 	if !ok {
 		return
 	}
