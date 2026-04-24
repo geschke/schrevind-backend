@@ -47,6 +47,11 @@ func IsValidDepotRole(role string) bool {
 	return isValidRole(EntityTypeDepot, role)
 }
 
+// IsValidGroupRole returns true if role is a valid group role.
+func IsValidGroupRole(role string) bool {
+	return isValidRole(EntityTypeGroup, role)
+}
+
 func isValidRole(entityType, role string) bool {
 	roles, ok := ValidRoles[entityType]
 	if !ok {
@@ -288,6 +293,29 @@ SELECT COUNT(*)
 `, EntityTypeDepot, depotID, RoleDepotOwner).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count depot owners: %w", err)
+	}
+	return count, nil
+}
+
+// CountGroupAdminMemberships returns the number of admin memberships for the given group.
+func (d *DB) CountGroupAdminMemberships(groupID int64) (int, error) {
+	if d == nil || d.SQL == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	if groupID <= 0 {
+		return 0, fmt.Errorf("groupID must be > 0")
+	}
+
+	var count int
+	err := d.SQL.QueryRow(`
+SELECT COUNT(*)
+  FROM memberships
+ WHERE entity_type = ?
+   AND entity_id   = ?
+   AND role        = ?;
+`, EntityTypeGroup, groupID, RoleGroupAdmin).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count group admins: %w", err)
 	}
 	return count, nil
 }

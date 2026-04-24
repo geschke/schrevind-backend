@@ -1,7 +1,7 @@
 package controller
 
 import (
-	"fmt"
+	"errors"
 	"net/http"
 	"strconv"
 	"strings"
@@ -44,7 +44,18 @@ type updateGroupRequest struct {
 	Name *string `json:"Name"`
 }
 
-type groupMemberRequest struct {
+type groupMemberAddRequest struct {
+	GroupID int64                `json:"GroupID"`
+	Members []groupMemberAddItem `json:"members"`
+}
+
+type groupMemberAddItem struct {
+	UserID int64  `json:"UserID"`
+	Role   string `json:"Role"`
+}
+
+type groupMemberRemoveRequest struct {
+	GroupID int64   `json:"GroupID"`
 	UserIDs []int64 `json:"UserIDs"`
 }
 
@@ -97,6 +108,98 @@ func parseGroupID(c *gin.Context) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func (ct GroupsController) ensureMemberActionContext(c *gin.Context, sessionUserID, contextGroupID int64, action string) bool {
+	if contextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return false
+	}
+
+	if contextGroupID == db.SystemGroupID {
+		allowed, err := ct.G.Can(sessionUserID, action)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return false
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_CONTEXT_GROUP"})
+			return false
+		}
+		return true
+	}
+
+	inGroup, err := ct.DB.IsUserInGroup(contextGroupID, sessionUserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return false
+	}
+	if !inGroup {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_CONTEXT_GROUP"})
+		return false
+	}
+
+	return true
+}
+
+func uniquePositiveUserIDs(userIDs []int64) ([]int64, string) {
+	seen := make(map[int64]struct{}, len(userIDs))
+	out := make([]int64, 0, len(userIDs))
+	for _, uid := range userIDs {
+		if uid <= 0 {
+			return nil, "INVALID_USER_ID"
+		}
+		if _, ok := seen[uid]; ok {
+			return nil, "DUPLICATE_USER_ID"
+		}
+		seen[uid] = struct{}{}
+		out = append(out, uid)
+	}
+	return out, ""
+}
+
+func (ct GroupsController) groupAdminCountAfterAdd(groupID int64, members []groupMemberAddItem) (int, error) {
+	count, err := ct.DB.CountGroupAdminMemberships(groupID)
+	if err != nil {
+		return 0, err
+	}
+
+	for _, member := range members {
+		current, found, err := ct.DB.GetMembership(db.EntityTypeGroup, groupID, member.UserID)
+		if err != nil {
+			return 0, err
+		}
+		currentAdmin := found && current.Role == db.RoleGroupAdmin
+		nextAdmin := member.Role == db.RoleGroupAdmin
+
+		switch {
+		case currentAdmin && !nextAdmin:
+			count--
+		case !currentAdmin && nextAdmin:
+			count++
+		}
+	}
+
+	return count, nil
+}
+
+func (ct GroupsController) groupAdminCountAfterRemove(groupID int64, userIDs []int64) (int, error) {
+	count, err := ct.DB.CountGroupAdminMemberships(groupID)
+	if err != nil {
+		return 0, err
+	}
+
+	for _, uid := range userIDs {
+		current, found, err := ct.DB.GetMembership(db.EntityTypeGroup, groupID, uid)
+		if err != nil {
+			return 0, err
+		}
+		if found && current.Role == db.RoleGroupAdmin {
+			count--
+		}
+	}
+
+	return count, nil
 }
 
 // GET /api/groups/list
@@ -391,14 +494,10 @@ func (ct GroupsController) GetMembers(c *gin.Context) {
 		return
 	}
 
-	items, err := ct.DB.ListUsersByGroupID(groupID)
+	items, err := ct.DB.ListGroupMembersByGroupID(groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
-	}
-
-	for i := range items {
-		items[i].Password = ""
 	}
 
 	c.JSON(http.StatusOK, gin.H{
@@ -417,7 +516,7 @@ func (ct GroupsController) PostMemberAdd(c *gin.Context) {
 		return
 	}
 
-	groupID, ok := parseGroupID(c)
+	targetGroupID, ok := parseGroupID(c)
 	if !ok {
 		return
 	}
@@ -428,7 +527,21 @@ func (ct GroupsController) PostMemberAdd(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "member:add", groupID)
+	var req groupMemberAddRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if len(req.Members) == 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "MISSING_MEMBERS"})
+		return
+	}
+
+	if !ct.ensureMemberActionContext(c, sessionUserID, req.GroupID, "member:add") {
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "member:add", targetGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -438,25 +551,45 @@ func (ct GroupsController) PostMemberAdd(c *gin.Context) {
 		return
 	}
 
-	var req groupMemberRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
-		return
-	}
-	if len(req.UserIDs) == 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "MISSING_USER_IDS"})
-		return
-	}
-
-	fmt.Println(req.UserIDs)
-	var addedCount, skippedCount int64
-	for _, uid := range req.UserIDs {
-		if uid <= 0 {
+	seen := make(map[int64]struct{}, len(req.Members))
+	for i := range req.Members {
+		req.Members[i].Role = strings.TrimSpace(req.Members[i].Role)
+		if req.Members[i].UserID <= 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
 			return
 		}
-		added, err := ct.DB.AddUserToGroup(groupID, uid)
+		if _, ok := seen[req.Members[i].UserID]; ok {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "DUPLICATE_USER_ID"})
+			return
+		}
+		seen[req.Members[i].UserID] = struct{}{}
+		if req.Members[i].Role != "" && !db.IsValidGroupRole(req.Members[i].Role) {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_ROLE"})
+			return
+		}
+	}
+
+	finalAdminCount, err := ct.groupAdminCountAfterAdd(targetGroupID, req.Members)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if finalAdminCount <= 0 {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "LAST_GROUP_ADMIN"})
+		return
+	}
+
+	var addedCount, skippedCount int64
+	for _, member := range req.Members {
+		if member.Role != db.RoleGroupAdmin {
+			continue
+		}
+		added, err := ct.DB.AddGroupMember(targetGroupID, member.UserID, member.Role)
 		if err != nil {
+			if errors.Is(err, db.ErrLastGroupAdmin) {
+				c.JSON(http.StatusConflict, gin.H{"success": false, "message": "LAST_GROUP_ADMIN"})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
 		}
@@ -466,8 +599,34 @@ func (ct GroupsController) PostMemberAdd(c *gin.Context) {
 				UserID:     sessionUserID,
 				Action:     db.ActionGrant,
 				EntityType: db.EntityTypeGroup,
-				EntityID:   groupID,
-				Detail:     strconv.FormatInt(uid, 10),
+				EntityID:   targetGroupID,
+				Detail:     strings.Join([]string{strconv.FormatInt(member.UserID, 10), member.Role}, ":"),
+			})
+		} else {
+			skippedCount++
+		}
+	}
+	for _, member := range req.Members {
+		if member.Role == db.RoleGroupAdmin {
+			continue
+		}
+		added, err := ct.DB.AddGroupMember(targetGroupID, member.UserID, member.Role)
+		if err != nil {
+			if errors.Is(err, db.ErrLastGroupAdmin) {
+				c.JSON(http.StatusConflict, gin.H{"success": false, "message": "LAST_GROUP_ADMIN"})
+				return
+			}
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if added {
+			addedCount++
+			_ = ct.DB.WriteAuditLog(&db.AuditLog{
+				UserID:     sessionUserID,
+				Action:     db.ActionGrant,
+				EntityType: db.EntityTypeGroup,
+				EntityID:   targetGroupID,
+				Detail:     strconv.FormatInt(member.UserID, 10),
 			})
 		} else {
 			skippedCount++
@@ -490,7 +649,7 @@ func (ct GroupsController) PostMemberRemove(c *gin.Context) {
 		return
 	}
 
-	groupID, ok := parseGroupID(c)
+	targetGroupID, ok := parseGroupID(c)
 	if !ok {
 		return
 	}
@@ -501,17 +660,7 @@ func (ct GroupsController) PostMemberRemove(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "member:remove", groupID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	var req groupMemberRequest
+	var req groupMemberRemoveRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
@@ -521,14 +670,44 @@ func (ct GroupsController) PostMemberRemove(c *gin.Context) {
 		return
 	}
 
+	if !ct.ensureMemberActionContext(c, sessionUserID, req.GroupID, "member:remove") {
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "member:remove", targetGroupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	userIDs, message := uniquePositiveUserIDs(req.UserIDs)
+	if message != "" {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": message})
+		return
+	}
+
+	finalAdminCount, err := ct.groupAdminCountAfterRemove(targetGroupID, userIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if finalAdminCount <= 0 {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "LAST_GROUP_ADMIN"})
+		return
+	}
+
 	var removedCount, notFoundCount int64
-	for _, uid := range req.UserIDs {
-		if uid <= 0 {
-			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
-			return
-		}
-		removed, err := ct.DB.RemoveUserFromGroup(groupID, uid)
+	for _, uid := range userIDs {
+		removed, err := ct.DB.RemoveGroupMember(targetGroupID, uid)
 		if err != nil {
+			if errors.Is(err, db.ErrLastGroupAdmin) {
+				c.JSON(http.StatusConflict, gin.H{"success": false, "message": "LAST_GROUP_ADMIN"})
+				return
+			}
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
 		}
@@ -538,7 +717,7 @@ func (ct GroupsController) PostMemberRemove(c *gin.Context) {
 				UserID:     sessionUserID,
 				Action:     db.ActionRevoke,
 				EntityType: db.EntityTypeGroup,
-				EntityID:   groupID,
+				EntityID:   targetGroupID,
 				Detail:     strconv.FormatInt(uid, 10),
 			})
 		} else {

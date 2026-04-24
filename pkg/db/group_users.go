@@ -2,13 +2,32 @@ package db
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
+	"strings"
+	"time"
 )
+
+// ErrLastGroupAdmin is returned when an operation would leave a group without an admin.
+var ErrLastGroupAdmin = errors.New("last group admin cannot be removed")
 
 // GroupUser represents a single row in the group_users join table.
 type GroupUser struct {
 	GroupID int64 `json:"GroupID"`
 	UserID  int64 `json:"UserID"`
+}
+
+// GroupMember represents a user in a group enriched with their group role.
+type GroupMember struct {
+	ID        int64  `json:"ID"`
+	FirstName string `json:"FirstName,omitempty"`
+	LastName  string `json:"LastName,omitempty"`
+	Email     string `json:"Email,omitempty"`
+	Locale    string `json:"Locale,omitempty"`
+	Status    string `json:"Status,omitempty"`
+	Role      string `json:"Role"`
+	CreatedAt int64  `json:"CreatedAt,omitempty"`
+	UpdatedAt int64  `json:"UpdatedAt,omitempty"`
 }
 
 // AddUserToGroup adds a user to a group.
@@ -40,6 +59,101 @@ ON CONFLICT(group_id, user_id) DO NOTHING;
 	return affected > 0, nil
 }
 
+// AddGroupMember adds a user to a group and sets or clears their explicit group role.
+// Empty role means plain group membership without a memberships row.
+func (d *DB) AddGroupMember(groupID, userID int64, role string) (bool, error) {
+	if d == nil || d.SQL == nil {
+		return false, fmt.Errorf("db not initialized")
+	}
+	if groupID <= 0 {
+		return false, fmt.Errorf("groupID must be > 0")
+	}
+	if userID <= 0 {
+		return false, fmt.Errorf("userID must be > 0")
+	}
+	role = strings.TrimSpace(role)
+	if role != "" && !IsValidGroupRole(role) {
+		return false, fmt.Errorf("invalid group role %q", role)
+	}
+
+	tx, err := d.SQL.Begin()
+	if err != nil {
+		return false, fmt.Errorf("add group member: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	res, err := tx.Exec(`
+INSERT INTO group_users (group_id, user_id)
+VALUES (?, ?)
+ON CONFLICT(group_id, user_id) DO NOTHING;
+`, groupID, userID)
+	if err != nil {
+		return false, fmt.Errorf("add group member: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("add group member rows affected: %w", err)
+	}
+
+	if role == "" {
+		var currentRole string
+		err := tx.QueryRow(`
+SELECT role
+  FROM memberships
+ WHERE entity_type = ?
+   AND entity_id   = ?
+   AND user_id     = ?
+ LIMIT 1;
+`, EntityTypeGroup, groupID, userID).Scan(&currentRole)
+		if err != nil && err != sql.ErrNoRows {
+			return false, fmt.Errorf("add group member current role: %w", err)
+		}
+		if currentRole == RoleGroupAdmin {
+			count, err := countGroupAdminsTx(tx, groupID)
+			if err != nil {
+				return false, err
+			}
+			if count <= 1 {
+				return false, ErrLastGroupAdmin
+			}
+		}
+
+		if _, err := tx.Exec(`
+DELETE FROM memberships
+ WHERE entity_type = ?
+   AND entity_id   = ?
+   AND user_id     = ?;
+`, EntityTypeGroup, groupID, userID); err != nil {
+			return false, fmt.Errorf("add group member clear role: %w", err)
+		}
+		count, err := countGroupAdminsTx(tx, groupID)
+		if err != nil {
+			return false, err
+		}
+		if count <= 0 {
+			return false, ErrLastGroupAdmin
+		}
+	} else {
+		now := time.Now().Unix()
+		if _, err := tx.Exec(`
+INSERT INTO memberships (entity_type, entity_id, user_id, role, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(entity_type, entity_id, user_id) DO UPDATE SET
+  role       = excluded.role,
+  updated_at = excluded.updated_at;
+`, EntityTypeGroup, groupID, userID, role, now, now); err != nil {
+			return false, fmt.Errorf("add group member grant role: %w", err)
+		}
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("add group member commit: %w", err)
+	}
+
+	return affected > 0, nil
+}
+
 // RemoveUserFromGroup removes a user from a group.
 // Returns true if a row was deleted, false if not found.
 func (d *DB) RemoveUserFromGroup(groupID, userID int64) (bool, error) {
@@ -67,6 +181,91 @@ DELETE FROM group_users
 		return false, fmt.Errorf("remove user from group rows affected: %w", err)
 	}
 	return affected > 0, nil
+}
+
+// RemoveGroupMember removes a user from group_users and clears their group membership role.
+func (d *DB) RemoveGroupMember(groupID, userID int64) (bool, error) {
+	if d == nil || d.SQL == nil {
+		return false, fmt.Errorf("db not initialized")
+	}
+	if groupID <= 0 {
+		return false, fmt.Errorf("groupID must be > 0")
+	}
+	if userID <= 0 {
+		return false, fmt.Errorf("userID must be > 0")
+	}
+
+	tx, err := d.SQL.Begin()
+	if err != nil {
+		return false, fmt.Errorf("remove group member: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	var currentRole string
+	err = tx.QueryRow(`
+SELECT role
+  FROM memberships
+ WHERE entity_type = ?
+   AND entity_id   = ?
+   AND user_id     = ?
+ LIMIT 1;
+`, EntityTypeGroup, groupID, userID).Scan(&currentRole)
+	if err != nil && err != sql.ErrNoRows {
+		return false, fmt.Errorf("remove group member current role: %w", err)
+	}
+	if currentRole == RoleGroupAdmin {
+		count, err := countGroupAdminsTx(tx, groupID)
+		if err != nil {
+			return false, err
+		}
+		if count <= 1 {
+			return false, ErrLastGroupAdmin
+		}
+	}
+
+	res, err := tx.Exec(`
+DELETE FROM group_users
+ WHERE group_id = ?
+   AND user_id  = ?;
+`, groupID, userID)
+	if err != nil {
+		return false, fmt.Errorf("remove group member: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("remove group member rows affected: %w", err)
+	}
+
+	if _, err := tx.Exec(`
+DELETE FROM memberships
+ WHERE entity_type = ?
+   AND entity_id   = ?
+   AND user_id     = ?;
+`, EntityTypeGroup, groupID, userID); err != nil {
+		return false, fmt.Errorf("remove group member role: %w", err)
+	}
+
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("remove group member commit: %w", err)
+	}
+
+	return affected > 0, nil
+}
+
+func countGroupAdminsTx(tx *sql.Tx, groupID int64) (int, error) {
+	var count int
+	err := tx.QueryRow(`
+SELECT COUNT(*)
+  FROM memberships
+ WHERE entity_type = ?
+   AND entity_id   = ?
+   AND role        = ?;
+`, EntityTypeGroup, groupID, RoleGroupAdmin).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count group admins: %w", err)
+	}
+	return count, nil
 }
 
 // IsUserInGroup checks whether a user is a member of the given group.
@@ -149,7 +348,7 @@ func (d *DB) ListUsersByGroupID(groupID int64) ([]User, error) {
 	}
 
 	rows, err := d.SQL.Query(`
-SELECT u.id, u.firstname, u.lastname, u.email, u.status, u.created_at, u.updated_at
+SELECT u.id, u.firstname, u.lastname, u.email, u.locale, u.status, u.created_at, u.updated_at
   FROM users u
   JOIN group_users gu ON gu.user_id = u.id
  WHERE gu.group_id = ?
@@ -168,6 +367,7 @@ SELECT u.id, u.firstname, u.lastname, u.email, u.status, u.created_at, u.updated
 			&u.FirstName,
 			&u.LastName,
 			&u.Email,
+			&u.Locale,
 			&u.Status,
 			&u.CreatedAt,
 			&u.UpdatedAt,
@@ -178,6 +378,64 @@ SELECT u.id, u.firstname, u.lastname, u.email, u.status, u.created_at, u.updated
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate users by group: %w", err)
+	}
+
+	return out, nil
+}
+
+// ListGroupMembersByGroupID returns all users belonging to the given group
+// enriched with their explicit group role, if any.
+func (d *DB) ListGroupMembersByGroupID(groupID int64) ([]GroupMember, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	if groupID <= 0 {
+		return nil, fmt.Errorf("groupID must be > 0")
+	}
+
+	rows, err := d.SQL.Query(`
+SELECT u.id,
+       u.firstname,
+       u.lastname,
+       u.email,
+       u.locale,
+       u.status,
+       COALESCE(m.role, '') AS role,
+       u.created_at,
+       u.updated_at
+  FROM users u
+  JOIN group_users gu ON gu.user_id = u.id
+  LEFT JOIN memberships m ON m.entity_type = ?
+                          AND m.entity_id   = gu.group_id
+                          AND m.user_id     = u.id
+ WHERE gu.group_id = ?
+ ORDER BY u.id ASC;
+`, EntityTypeGroup, groupID)
+	if err != nil {
+		return nil, fmt.Errorf("list group members by group: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]GroupMember, 0)
+	for rows.Next() {
+		var member GroupMember
+		if err := rows.Scan(
+			&member.ID,
+			&member.FirstName,
+			&member.LastName,
+			&member.Email,
+			&member.Locale,
+			&member.Status,
+			&member.Role,
+			&member.CreatedAt,
+			&member.UpdatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("scan group member: %w", err)
+		}
+		out = append(out, member)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate group members by group: %w", err)
 	}
 
 	return out, nil
