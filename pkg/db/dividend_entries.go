@@ -615,6 +615,124 @@ SELECT COUNT(*)
 	return count, nil
 }
 
+// ListAccessibleDividendEntriesBySecurityID returns accessible dividend entries for a security.
+func (d *DB) ListAccessibleDividendEntriesBySecurityID(userID int64, all bool, roles []string, securityID int64, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	if userID <= 0 {
+		return nil, fmt.Errorf("userID must be > 0")
+	}
+	if securityID <= 0 {
+		return nil, fmt.Errorf("securityID must be > 0")
+	}
+	if limit < 0 {
+		return nil, fmt.Errorf("limit must be >= 0")
+	}
+	if offset < 0 {
+		return nil, fmt.Errorf("offset must be >= 0")
+	}
+
+	sortColumn, err := mapDividendEntrySortColumn(sortBy)
+	if err != nil {
+		return nil, fmt.Errorf("list accessible dividend entries by security: %w", err)
+	}
+	sortDirection, err := normalizeDividendEntrySortDirection(direction)
+	if err != nil {
+		return nil, fmt.Errorf("list accessible dividend entries by security: %w", err)
+	}
+
+	query := ""
+	args := make([]any, 0, 3+len(roles))
+	if all {
+		query = `
+SELECT` + dividendEntrySelectColumns + `
+  FROM dividend_entries de
+ WHERE de.security_id = ?
+`
+		args = append(args, securityID)
+	} else {
+		query = `
+SELECT` + dividendEntrySelectColumns + `
+  FROM dividend_entries de
+  JOIN memberships m ON m.entity_type = ? AND m.entity_id = de.depot_id
+ WHERE m.user_id = ?
+   AND de.security_id = ?
+`
+		args = append(args, EntityTypeDepot, userID, securityID)
+		query, args = appendDividendEntryRolesFilter(query, args, roles)
+	}
+
+	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query += " ORDER BY " + sortColumn + " " + sortDirection + ", de.id " + sortDirection + "\n"
+	query += " LIMIT ? OFFSET ?;"
+	args = append(args, limit, offset)
+
+	rows, err := d.SQL.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list accessible dividend entries by security: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]DividendEntry, 0)
+	for rows.Next() {
+		e, err := scanDividendEntryRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan accessible dividend entry by security: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate accessible dividend entries by security: %w", err)
+	}
+
+	return out, nil
+}
+
+// CountAccessibleDividendEntriesBySecurityID returns the total accessible entry count for a security.
+func (d *DB) CountAccessibleDividendEntriesBySecurityID(userID int64, all bool, roles []string, securityID int64, fromDate, toDate string) (int64, error) {
+	if d == nil || d.SQL == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	if userID <= 0 {
+		return 0, fmt.Errorf("userID must be > 0")
+	}
+	if securityID <= 0 {
+		return 0, fmt.Errorf("securityID must be > 0")
+	}
+
+	query := ""
+	args := make([]any, 0, 3+len(roles))
+	if all {
+		query = `
+SELECT COUNT(*)
+  FROM dividend_entries de
+ WHERE de.security_id = ?
+`
+		args = append(args, securityID)
+	} else {
+		query = `
+SELECT COUNT(*)
+  FROM dividend_entries de
+  JOIN memberships m ON m.entity_type = ? AND m.entity_id = de.depot_id
+ WHERE m.user_id = ?
+   AND de.security_id = ?
+`
+		args = append(args, EntityTypeDepot, userID, securityID)
+		query, args = appendDividendEntryRolesFilter(query, args, roles)
+	}
+
+	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query += ";"
+
+	var count int64
+	err := d.SQL.QueryRow(query, args...).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count accessible dividend entries by security: %w", err)
+	}
+	return count, nil
+}
+
 // ListDividendEntriesByDepotID returns a filtered and paginated list for the requested filter.
 func (d *DB) ListDividendEntriesByDepotID(depotID int64, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
 	return d.listDividendEntriesByColumnPage("depot_id", depotID, limit, offset, sortBy, direction, fromDate, toDate)

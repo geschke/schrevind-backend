@@ -23,6 +23,7 @@ var permissions = map[string]map[string][]string{
 		"group:edit":      {"admin"},
 		"group:delete":    {"admin"},
 		"currency:delete": {"admin"},
+		"security:delete": {"admin"},
 		"member:add":      {"admin"},
 		"member:remove":   {"admin"},
 		"member:list":     {"admin"},

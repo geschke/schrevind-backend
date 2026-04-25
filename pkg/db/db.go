@@ -1,4 +1,4 @@
-﻿package db
+package db
 
 import (
 	"database/sql"
@@ -137,6 +137,7 @@ CREATE TABLE IF NOT EXISTS depots (
 		`
 CREATE TABLE IF NOT EXISTS securities (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  group_id      INTEGER NOT NULL,
   name          TEXT NOT NULL DEFAULT '',
   isin          TEXT NOT NULL DEFAULT '',
   wkn           TEXT NOT NULL DEFAULT '',
@@ -146,11 +147,11 @@ CREATE TABLE IF NOT EXISTS securities (
   updated_at    INTEGER NOT NULL DEFAULT 0
 );
 `,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_securities_isin ON securities(isin);`,
-		`CREATE INDEX IF NOT EXISTS idx_securities_wkn ON securities(wkn);`,
-		`CREATE INDEX IF NOT EXISTS idx_securities_symbol ON securities(symbol);`,
-		`CREATE INDEX IF NOT EXISTS idx_securities_name ON securities(name);`,
-		`CREATE INDEX IF NOT EXISTS idx_securities_status ON securities(status);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_securities_group_isin ON securities(group_id, isin);`,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_securities_group_name ON securities(group_id, name);`,
+		`CREATE INDEX IF NOT EXISTS idx_securities_group_wkn ON securities(group_id, wkn);`,
+		`CREATE INDEX IF NOT EXISTS idx_securities_group_symbol ON securities(group_id, symbol);`,
+		`CREATE INDEX IF NOT EXISTS idx_securities_group_status ON securities(group_id, status);`,
 
 		`
 CREATE TABLE IF NOT EXISTS withholding_tax_defaults (

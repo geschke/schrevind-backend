@@ -142,9 +142,9 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 	// 5. Insert securities.
 	for _, s := range doc.Data.Securities {
 		if _, err := tx.Exec(`
-INSERT INTO securities (id, name, isin, wkn, symbol, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-`, s.ID, s.Name, s.ISIN, s.WKN, s.Symbol, s.Status, s.CreatedAt, s.UpdatedAt); err != nil {
+INSERT INTO securities (id, group_id, name, isin, wkn, symbol, status, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+`, s.ID, s.GroupID, s.Name, s.ISIN, s.WKN, s.Symbol, s.Status, s.CreatedAt, s.UpdatedAt); err != nil {
 			return fmt.Errorf("IMPORT_FAILED: insert security id=%d: %w", s.ID, err)
 		}
 	}

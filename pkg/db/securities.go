@@ -15,6 +15,7 @@ const (
 
 type Security struct {
 	ID        int64  `json:"ID"`
+	GroupID   int64  `json:"GroupID"`
 	Name      string `json:"Name,omitempty"`
 	ISIN      string `json:"ISIN,omitempty"`
 	WKN       string `json:"WKN,omitempty"`
@@ -32,6 +33,12 @@ func normalizeSecurity(security Security) (Security, error) {
 	security.Symbol = strings.TrimSpace(security.Symbol)
 	security.Status = strings.TrimSpace(security.Status)
 
+	if security.GroupID <= 0 {
+		return Security{}, fmt.Errorf("groupID must be > 0")
+	}
+	if security.Name == "" {
+		return Security{}, fmt.Errorf("name is required")
+	}
 	if security.ISIN == "" {
 		return Security{}, fmt.Errorf("isin is required")
 	}
@@ -52,6 +59,7 @@ func scanSecurity(scanner interface {
 	var security Security
 	if err := scanner.Scan(
 		&security.ID,
+		&security.GroupID,
 		&security.Name,
 		&security.ISIN,
 		&security.WKN,
@@ -116,9 +124,9 @@ func (d *DB) CreateSecurity(security *Security) error {
 
 	res, err := d.SQL.Exec(`
 INSERT INTO securities (
-  name, isin, wkn, symbol, status, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?);
-`, normalized.Name, normalized.ISIN, normalized.WKN, normalized.Symbol, normalized.Status, normalized.CreatedAt, normalized.UpdatedAt)
+  group_id, name, isin, wkn, symbol, status, created_at, updated_at
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+`, normalized.GroupID, normalized.Name, normalized.ISIN, normalized.WKN, normalized.Symbol, normalized.Status, normalized.CreatedAt, normalized.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create security: %w", err)
 	}
@@ -133,7 +141,7 @@ INSERT INTO securities (
 	return nil
 }
 
-// UpdateSecurity updates the security record by ID.
+// UpdateSecurity updates the security record by ID and group ID.
 func (d *DB) UpdateSecurity(security *Security) error {
 	if d == nil || d.SQL == nil {
 		return fmt.Errorf("db not initialized")
@@ -158,8 +166,9 @@ UPDATE securities
        symbol = ?,
        status = ?,
        updated_at = ?
- WHERE id = ?;
-`, normalized.Name, normalized.ISIN, normalized.WKN, normalized.Symbol, normalized.Status, normalized.UpdatedAt, normalized.ID)
+ WHERE id = ?
+   AND group_id = ?;
+`, normalized.Name, normalized.ISIN, normalized.WKN, normalized.Symbol, normalized.Status, normalized.UpdatedAt, normalized.ID, normalized.GroupID)
 	if err != nil {
 		return fmt.Errorf("update security: %w", err)
 	}
@@ -168,37 +177,44 @@ UPDATE securities
 	return nil
 }
 
-// GetSecurityByID returns the security with the requested ID, or nil when not found.
-func (d *DB) GetSecurityByID(id int64) (*Security, error) {
+// GetSecurityByIDAndGroupID returns the security with the requested ID and group ID, or nil when not found.
+func (d *DB) GetSecurityByIDAndGroupID(id, groupID int64) (*Security, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	if id <= 0 {
 		return nil, fmt.Errorf("id must be > 0")
 	}
+	if groupID <= 0 {
+		return nil, fmt.Errorf("groupID must be > 0")
+	}
 
 	row := d.SQL.QueryRow(`
-SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
+SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
   FROM securities
  WHERE id = ?
+   AND group_id = ?
  LIMIT 1;
-`, id)
+`, id, groupID)
 
 	security, err := scanSecurity(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get security by id: %w", err)
+		return nil, fmt.Errorf("get security by id and group id: %w", err)
 	}
 
 	return security, nil
 }
 
-// GetSecurityByISIN returns the security for the requested ISIN, or nil when not found.
-func (d *DB) GetSecurityByISIN(isin string) (*Security, error) {
+// GetSecurityByISINAndGroupID returns the security for the requested ISIN and group ID, or nil when not found.
+func (d *DB) GetSecurityByISINAndGroupID(isin string, groupID int64) (*Security, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
+	}
+	if groupID <= 0 {
+		return nil, fmt.Errorf("groupID must be > 0")
 	}
 
 	isin = strings.ToUpper(strings.TrimSpace(isin))
@@ -207,27 +223,64 @@ func (d *DB) GetSecurityByISIN(isin string) (*Security, error) {
 	}
 
 	row := d.SQL.QueryRow(`
-SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
+SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
   FROM securities
- WHERE isin = ?
+ WHERE group_id = ?
+   AND isin = ?
  LIMIT 1;
-`, isin)
+`, groupID, isin)
 
 	security, err := scanSecurity(row)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("get security by isin: %w", err)
+		return nil, fmt.Errorf("get security by isin and group id: %w", err)
 	}
 
 	return security, nil
 }
 
-// ListSecurities returns a filtered and paginated list of securities.
-func (d *DB) ListSecurities(limit, offset int, sortBy, direction, status string) ([]Security, error) {
+// GetSecurityByNameAndGroupID returns the security for the requested name and group ID, or nil when not found.
+func (d *DB) GetSecurityByNameAndGroupID(name string, groupID int64) (*Security, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
+	}
+	if groupID <= 0 {
+		return nil, fmt.Errorf("groupID must be > 0")
+	}
+
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("name is required")
+	}
+
+	row := d.SQL.QueryRow(`
+SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
+  FROM securities
+ WHERE group_id = ?
+   AND name = ?
+ LIMIT 1;
+`, groupID, name)
+
+	security, err := scanSecurity(row)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get security by name and group id: %w", err)
+	}
+
+	return security, nil
+}
+
+// ListSecuritiesByGroupID returns a filtered and paginated list of securities for a group.
+func (d *DB) ListSecuritiesByGroupID(groupID int64, limit, offset int, sortBy, direction, status string) ([]Security, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	if groupID <= 0 {
+		return nil, fmt.Errorf("groupID must be > 0")
 	}
 	if limit < 0 {
 		return nil, fmt.Errorf("limit must be >= 0")
@@ -238,23 +291,25 @@ func (d *DB) ListSecurities(limit, offset int, sortBy, direction, status string)
 
 	sortColumn, err := mapSecuritySortColumn(sortBy)
 	if err != nil {
-		return nil, fmt.Errorf("list securities page: %w", err)
+		return nil, fmt.Errorf("list securities page by group: %w", err)
 	}
 	sortDirection, err := normalizeSecuritySortDirection(direction)
 	if err != nil {
-		return nil, fmt.Errorf("list securities page: %w", err)
+		return nil, fmt.Errorf("list securities page by group: %w", err)
 	}
 
 	status = strings.TrimSpace(status)
 
 	query := `
-SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
+SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
   FROM securities
+ WHERE group_id = ?
 `
-	args := make([]any, 0, 3)
+	args := make([]any, 0, 4)
+	args = append(args, groupID)
 
 	if status != "" {
-		query += " WHERE status = ?\n"
+		query += "   AND status = ?\n"
 		args = append(args, status)
 	}
 
@@ -264,7 +319,7 @@ SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
 
 	rows, err := d.SQL.Query(query, args...)
 	if err != nil {
-		return nil, fmt.Errorf("list securities page: %w", err)
+		return nil, fmt.Errorf("list securities page by group: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
@@ -272,61 +327,60 @@ SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
 	for rows.Next() {
 		security, err := scanSecurity(rows)
 		if err != nil {
-			return nil, fmt.Errorf("scan security page: %w", err)
+			return nil, fmt.Errorf("scan security page by group: %w", err)
 		}
 		out = append(out, *security)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate securities page: %w", err)
+		return nil, fmt.Errorf("iterate securities page by group: %w", err)
 	}
 
 	return out, nil
 }
 
-// ListAllSecuritiesLite returns all securities with only the fields needed for compact list UIs.
-func (d *DB) ListAllSecuritiesLite() ([]Security, error) {
+// ListAllSecuritiesByGroupID returns all securities for the group with the fields needed for list UIs.
+func (d *DB) ListAllSecuritiesByGroupID(groupID int64) ([]Security, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
+	if groupID <= 0 {
+		return nil, fmt.Errorf("groupID must be > 0")
+	}
 
 	rows, err := d.SQL.Query(`
-SELECT id, name, isin, wkn
+SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
   FROM securities
+ WHERE group_id = ?
  ORDER BY name COLLATE NOCASE ASC, id ASC;
-`)
+`, groupID)
 	if err != nil {
-		return nil, fmt.Errorf("list all securities lite: %w", err)
+		return nil, fmt.Errorf("list all securities by group: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 
 	out := make([]Security, 0)
 	for rows.Next() {
-		var security Security
-		if err := rows.Scan(
-			&security.ID,
-			&security.Name,
-			&security.ISIN,
-			&security.WKN,
-		); err != nil {
-			return nil, fmt.Errorf("scan security lite: %w", err)
+		security, err := scanSecurity(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan security by group: %w", err)
 		}
-		out = append(out, security)
+		out = append(out, *security)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate securities lite: %w", err)
+		return nil, fmt.Errorf("iterate securities by group: %w", err)
 	}
 
 	return out, nil
 }
 
-// ListAllSecurities returns all security rows without any filter. Intended for full-database exports.
-func (d *DB) ListAllSecurities() ([]Security, error) {
+// ListAllSecuritiesForExport returns all security rows without any filter.
+func (d *DB) ListAllSecuritiesForExport() ([]Security, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
 
 	rows, err := d.SQL.Query(`
-SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
+SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
   FROM securities
  ORDER BY id ASC;
 `)
@@ -350,36 +404,43 @@ SELECT id, name, isin, wkn, symbol, status, created_at, updated_at
 	return out, nil
 }
 
-// CountSecurities returns the total number of securities matching the given status filter.
-// An empty status string counts all securities regardless of status.
-func (d *DB) CountSecurities(status string) (int64, error) {
+// CountSecuritiesByGroupID returns the total number of securities matching the given group and status filter.
+// An empty status string counts all securities in the group regardless of status.
+func (d *DB) CountSecuritiesByGroupID(groupID int64, status string) (int64, error) {
 	if d == nil || d.SQL == nil {
 		return 0, fmt.Errorf("db not initialized")
 	}
+	if groupID <= 0 {
+		return 0, fmt.Errorf("groupID must be > 0")
+	}
 
 	status = strings.TrimSpace(status)
-	query := `SELECT COUNT(*) FROM securities`
-	args := make([]any, 0, 1)
+	query := `SELECT COUNT(*) FROM securities WHERE group_id = ?`
+	args := make([]any, 0, 2)
+	args = append(args, groupID)
 	if status != "" {
-		query += " WHERE status = ?"
+		query += " AND status = ?"
 		args = append(args, status)
 	}
 	query += ";"
 
 	var count int64
 	if err := d.SQL.QueryRow(query, args...).Scan(&count); err != nil {
-		return 0, fmt.Errorf("count securities: %w", err)
+		return 0, fmt.Errorf("count securities by group: %w", err)
 	}
 	return count, nil
 }
 
 // SetSecurityStatus updates only the status and updated_at fields of the security.
-func (d *DB) SetSecurityStatus(id int64, status string) error {
+func (d *DB) SetSecurityStatus(id, groupID int64, status string) error {
 	if d == nil || d.SQL == nil {
 		return fmt.Errorf("db not initialized")
 	}
 	if id <= 0 {
 		return fmt.Errorf("id must be > 0")
+	}
+	if groupID <= 0 {
+		return fmt.Errorf("groupID must be > 0")
 	}
 
 	status = strings.TrimSpace(status)
@@ -387,26 +448,39 @@ func (d *DB) SetSecurityStatus(id int64, status string) error {
 UPDATE securities
    SET status = ?,
        updated_at = ?
- WHERE id = ?;
-`, status, time.Now().Unix(), id)
+ WHERE id = ?
+   AND group_id = ?;
+`, status, time.Now().Unix(), id, groupID)
 	if err != nil {
 		return fmt.Errorf("set security status: %w", err)
 	}
 	return nil
 }
 
-// DeleteSecurity deletes the security record by ID.
-func (d *DB) DeleteSecurity(id int64) error {
+// DeleteSecurity deletes the security record by ID and group ID.
+func (d *DB) DeleteSecurity(id, groupID int64) error {
 	if d == nil || d.SQL == nil {
 		return fmt.Errorf("db not initialized")
 	}
 	if id <= 0 {
 		return fmt.Errorf("id must be > 0")
 	}
+	if groupID <= 0 {
+		return fmt.Errorf("groupID must be > 0")
+	}
 
-	_, err := d.SQL.Exec(`DELETE FROM securities WHERE id = ?;`, id)
+	_, err := d.SQL.Exec(`DELETE FROM securities WHERE id = ? AND group_id = ?;`, id, groupID)
 	if err != nil {
 		return fmt.Errorf("delete security: %w", err)
 	}
 	return nil
+}
+
+// SecurityHasDividendEntries returns true when the security is referenced by dividend entries.
+func (d *DB) SecurityHasDividendEntries(securityID int64) (bool, error) {
+	count, err := d.CountDividendEntriesBySecurityID(securityID, "", "")
+	if err != nil {
+		return false, err
+	}
+	return count > 0, nil
 }

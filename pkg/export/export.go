@@ -86,7 +86,7 @@ func buildExportJSON(database *db.DB) ([]byte, error) {
 		return nil, fmt.Errorf("export depots: %w", err)
 	}
 
-	securities, err := database.ListAllSecurities()
+	securities, err := database.ListAllSecuritiesForExport()
 	if err != nil {
 		return nil, fmt.Errorf("export securities: %w", err)
 	}

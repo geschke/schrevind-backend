@@ -79,7 +79,7 @@ func Start(database *db.DB) error {
 		router.POST("/api/depots/:id/access/change", depotsCtl.PostAccessChange)
 		router.OPTIONS("/api/depots/:id/access/change", depotsCtl.Options)
 
-		securitiesCtl := controller.NewSecuritiesController(database, store, sessionName)
+		securitiesCtl := controller.NewSecuritiesController(database, store, sessionName, g)
 		router.GET("/api/securities/list", securitiesCtl.GetList)
 		router.OPTIONS("/api/securities/list", securitiesCtl.Options)
 		router.GET("/api/securities/list-all", securitiesCtl.GetListAll)

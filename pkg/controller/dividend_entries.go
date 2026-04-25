@@ -251,6 +251,16 @@ func parseSecurityIDParam(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
+// parseDividendEntryContextGroupID parses and validates the context_group_id query parameter.
+func parseDividendEntryContextGroupID(c *gin.Context) (int64, bool) {
+	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("context_group_id")), 10, 64)
+	if err != nil || groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return 0, false
+	}
+	return groupID, true
+}
+
 // parseDividendEntryListParams parses pagination, sorting, direction, and optional date filters.
 func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, string, string, bool) {
 	limit := 20
@@ -461,6 +471,22 @@ func validateDividendEntryFXRate(database *db.DB, groupID int64, entry *db.Divid
 		errors["FXRateLabel"] = errFXRateLabelUnknownCurrency
 	}
 
+	return nil
+}
+
+// validateDividendEntrySecurity validates that the selected security exists in the active group context.
+func validateDividendEntrySecurity(database *db.DB, groupID int64, entry *db.DividendEntry, errors fieldErrors) error {
+	if entry.SecurityID <= 0 {
+		return nil
+	}
+
+	item, err := database.GetSecurityByIDAndGroupID(entry.SecurityID, groupID)
+	if err != nil {
+		return err
+	}
+	if item == nil {
+		errors["SecurityID"] = "INVALID_SECURITY_ID"
+	}
 	return nil
 }
 
@@ -882,11 +908,7 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		return
 	}
 
-	locale, ok, err := ct.currentSessionUserLocale(c)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
+	sessionUserID, ok := ct.currentSessionUserID(c)
 	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
@@ -896,24 +918,73 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 	if !ok {
 		return
 	}
+	groupID, ok := parseDividendEntryContextGroupID(c)
+	if !ok {
+		return
+	}
+
+	inGroup, err := ct.DB.IsUserInGroup(groupID, sessionUserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !inGroup {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	security, err := ct.DB.GetSecurityByIDAndGroupID(securityID, groupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if security == nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "SECURITY_NOT_FOUND"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoAny(sessionUserID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	scope, err := ct.G.ScopeForAction(sessionUserID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
 
 	limit, offset, sortBy, direction, fromDate, toDate, ok := parseDividendEntryListParams(c)
 	if !ok {
 		return
 	}
 
-	items, err := ct.DB.ListDividendEntriesBySecurityID(securityID, limit, offset, sortBy, direction, fromDate, toDate)
+	items, err := ct.DB.ListAccessibleDividendEntriesBySecurityID(sessionUserID, scope.All, scope.Roles, securityID, limit, offset, sortBy, direction, fromDate, toDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 
-	count, err := ct.DB.CountDividendEntriesBySecurityID(securityID, fromDate, toDate)
+	count, err := ct.DB.CountAccessibleDividendEntriesBySecurityID(sessionUserID, scope.All, scope.Roles, securityID, fromDate, toDate)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
 	items = formatDividendEntriesForLocale(items, locale)
 
 	c.JSON(http.StatusOK, gin.H{
@@ -986,6 +1057,10 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 	}
 	if !inGroup {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+	if err := validateDividendEntrySecurity(ct.DB, req.ContextGroupID, &entry, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 	if err := validateDividendEntryCurrencyPairs(ct.DB, req.ContextGroupID, &entry, fieldErrors); err != nil {
@@ -1187,6 +1262,10 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 	}
 	if !inGroup {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+	if err := validateDividendEntrySecurity(ct.DB, groupID, &updated, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 	if err := validateDividendEntryCurrencyPairs(ct.DB, groupID, &updated, fieldErrors); err != nil {
