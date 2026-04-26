@@ -105,7 +105,7 @@ func Start(database *db.DB) error {
 		router.POST("/api/currencies/delete/:id", currenciesCtl.PostDelete)
 		router.OPTIONS("/api/currencies/delete/:id", currenciesCtl.Options)
 
-		withholdingTaxDefaultsCtl := controller.NewWithholdingTaxDefaultsController(database, store, sessionName)
+		withholdingTaxDefaultsCtl := controller.NewWithholdingTaxDefaultsController(database, store, sessionName, g)
 		router.GET("/api/withholding-tax-defaults/list", withholdingTaxDefaultsCtl.GetList)
 		router.OPTIONS("/api/withholding-tax-defaults/list", withholdingTaxDefaultsCtl.Options)
 		router.GET("/api/withholding-tax-defaults/by-depot/:depot_id", withholdingTaxDefaultsCtl.GetListByDepot)

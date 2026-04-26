@@ -156,20 +156,20 @@ CREATE TABLE IF NOT EXISTS securities (
 		`
 CREATE TABLE IF NOT EXISTS withholding_tax_defaults (
   id                                      INTEGER PRIMARY KEY AUTOINCREMENT,
-  depot_id                                INTEGER,
+  group_id                                INTEGER NOT NULL,
+  depot_id                                INTEGER NOT NULL DEFAULT 0,
   country_code                            TEXT NOT NULL DEFAULT '',
   country_name                            TEXT NOT NULL DEFAULT '',
   withholding_tax_percent_default         TEXT NOT NULL DEFAULT '',
   withholding_tax_percent_credit_default  TEXT NOT NULL DEFAULT '',
   created_at                              INTEGER NOT NULL DEFAULT 0,
-  updated_at                              INTEGER NOT NULL DEFAULT 0,
-
-  FOREIGN KEY(depot_id) REFERENCES depots(id)
+  updated_at                              INTEGER NOT NULL DEFAULT 0
 );
 `,
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_withholding_tax_defaults_group_depot_country ON withholding_tax_defaults(group_id, depot_id, country_code);`,
+		`CREATE INDEX IF NOT EXISTS idx_withholding_tax_defaults_group_id ON withholding_tax_defaults(group_id);`,
 		`CREATE INDEX IF NOT EXISTS idx_withholding_tax_defaults_depot_id ON withholding_tax_defaults(depot_id);`,
-		`CREATE INDEX IF NOT EXISTS idx_withholding_tax_defaults_country_code ON withholding_tax_defaults(country_code);`,
-		`CREATE INDEX IF NOT EXISTS idx_withholding_tax_defaults_depot_country ON withholding_tax_defaults(depot_id, country_code);`,
+		`CREATE INDEX IF NOT EXISTS idx_withholding_tax_defaults_group_country ON withholding_tax_defaults(group_id, country_code);`,
 
 		`
 CREATE TABLE IF NOT EXISTS dividend_entries (

@@ -285,10 +285,25 @@ func (d *DB) DeleteGroup(id int64) error {
 		return fmt.Errorf("system group cannot be deleted")
 	}
 
-	_, err := d.SQL.Exec(`DELETE FROM groups WHERE id = ?;`, id)
+	tx, err := d.SQL.Begin()
+	if err != nil {
+		return fmt.Errorf("delete group begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`DELETE FROM withholding_tax_defaults WHERE group_id = ?;`, id); err != nil {
+		return fmt.Errorf("delete group withholding tax defaults: %w", err)
+	}
+
+	_, err = tx.Exec(`DELETE FROM groups WHERE id = ?;`, id)
 	if err != nil {
 		return fmt.Errorf("delete group: %w", err)
 	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete group commit: %w", err)
+	}
+
 	return nil
 }
 

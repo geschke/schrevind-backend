@@ -8,6 +8,7 @@ import (
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/cors"
 	"github.com/geschke/schrevind/pkg/db"
+	"github.com/geschke/schrevind/pkg/grrt"
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
 )
@@ -16,14 +17,16 @@ type WithholdingTaxDefaultsController struct {
 	DB          *db.DB
 	Store       sessions.Store
 	SessionName string
+	G           *grrt.Grrt
 }
 
 // NewWithholdingTaxDefaultsController constructs and returns a new instance.
-func NewWithholdingTaxDefaultsController(database *db.DB, store sessions.Store, sessionName string) *WithholdingTaxDefaultsController {
+func NewWithholdingTaxDefaultsController(database *db.DB, store sessions.Store, sessionName string, g *grrt.Grrt) *WithholdingTaxDefaultsController {
 	return &WithholdingTaxDefaultsController{
 		DB:          database,
 		Store:       store,
 		SessionName: sessionName,
+		G:           g,
 	}
 }
 
@@ -33,6 +36,7 @@ func (ct WithholdingTaxDefaultsController) Options(c *gin.Context) {
 }
 
 type addWithholdingTaxDefaultRequest struct {
+	ContextGroupID                     int64  `json:"ContextGroupID"`
 	DepotID                            int64  `json:"DepotID"`
 	CountryCode                        string `json:"CountryCode"`
 	CountryName                        string `json:"CountryName"`
@@ -41,11 +45,16 @@ type addWithholdingTaxDefaultRequest struct {
 }
 
 type updateWithholdingTaxDefaultRequest struct {
+	ContextGroupID                     int64   `json:"ContextGroupID"`
 	DepotID                            *int64  `json:"DepotID"`
 	CountryCode                        *string `json:"CountryCode"`
 	CountryName                        *string `json:"CountryName"`
 	WithholdingTaxPercentDefault       *string `json:"WithholdingTaxPercentDefault"`
 	WithholdingTaxPercentCreditDefault *string `json:"WithholdingTaxPercentCreditDefault"`
+}
+
+type deleteWithholdingTaxDefaultRequest struct {
+	ContextGroupID int64 `json:"ContextGroupID"`
 }
 
 // ensureAuthorized performs its package-specific operation.
@@ -66,6 +75,66 @@ func (ct WithholdingTaxDefaultsController) ensureAuthorized(c *gin.Context) bool
 	}
 	if _, ok := sess.Values["id"]; !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return false
+	}
+
+	return true
+}
+
+// currentSessionUserID returns the authenticated user ID from the current session.
+func (ct WithholdingTaxDefaultsController) currentSessionUserID(c *gin.Context) (int64, bool) {
+	sess, _ := ct.Store.Get(c.Request, ct.SessionName)
+	if sess == nil {
+		return 0, false
+	}
+	raw, ok := sess.Values["id"]
+	if !ok {
+		return 0, false
+	}
+	id, ok := raw.(int64)
+	if !ok {
+		return 0, false
+	}
+	return id, true
+}
+
+// ensureGroupMember requires the current user to be a member of the active group context.
+func (ct WithholdingTaxDefaultsController) ensureGroupMember(c *gin.Context, userID, groupID int64) bool {
+	if groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return false
+	}
+
+	inGroup, err := ct.DB.IsUserInGroup(groupID, userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return false
+	}
+	if !inGroup {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return false
+	}
+
+	return true
+}
+
+// ensureCanEditWithholdingTaxDefault verifies group membership and depot edit rights when depot-scoped.
+func (ct WithholdingTaxDefaultsController) ensureCanEditWithholdingTaxDefault(c *gin.Context, userID int64, item db.WithholdingTaxDefault) bool {
+	if !ct.ensureGroupMember(c, userID, item.GroupID) {
+		return false
+	}
+
+	if item.DepotID <= 0 {
+		return true
+	}
+
+	allowed, err := ct.G.CanDo(userID, db.EntityTypeDepot, "withholding-tax-default:edit", item.DepotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return false
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
 		return false
 	}
 
@@ -107,8 +176,21 @@ func parseOptionalDepotIDQuery(c *gin.Context) (int64, bool) {
 	return depotID, true
 }
 
+// parseWithholdingTaxContextGroupID parses and validates the context_group_id query parameter.
+func parseWithholdingTaxContextGroupID(c *gin.Context) (int64, bool) {
+	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("context_group_id")), 10, 64)
+	if err != nil || groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return 0, false
+	}
+	return groupID, true
+}
+
 // normalizeWithholdingTaxDefaultPayload performs its package-specific operation.
 func normalizeWithholdingTaxDefaultPayload(item db.WithholdingTaxDefault) (db.WithholdingTaxDefault, string) {
+	if item.GroupID <= 0 {
+		return item, "INVALID_GROUP_ID"
+	}
 	if item.DepotID < 0 {
 		return item, "INVALID_DEPOT_ID"
 	}
@@ -137,7 +219,20 @@ func (ct WithholdingTaxDefaultsController) GetList(c *gin.Context) {
 		return
 	}
 
-	items, err := ct.DB.ListWithholdingTaxDefaults()
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	groupID, ok := parseWithholdingTaxContextGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureGroupMember(c, userID, groupID) {
+		return
+	}
+
+	items, err := ct.DB.ListWithholdingTaxDefaultsByGroupID(groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -159,12 +254,25 @@ func (ct WithholdingTaxDefaultsController) GetListByDepot(c *gin.Context) {
 		return
 	}
 
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	groupID, ok := parseWithholdingTaxContextGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureGroupMember(c, userID, groupID) {
+		return
+	}
+
 	depotID, ok := parseDepotIDParam(c, "depot_id")
 	if !ok {
 		return
 	}
 
-	items, err := ct.DB.ListWithholdingTaxDefaultsByDepotID(depotID)
+	items, err := ct.DB.ListWithholdingTaxDefaultsByDepotIDAndGroupID(depotID, groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -186,6 +294,19 @@ func (ct WithholdingTaxDefaultsController) GetEffective(c *gin.Context) {
 		return
 	}
 
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	groupID, ok := parseWithholdingTaxContextGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureGroupMember(c, userID, groupID) {
+		return
+	}
+
 	depotID, ok := parseOptionalDepotIDQuery(c)
 	if !ok {
 		return
@@ -197,7 +318,7 @@ func (ct WithholdingTaxDefaultsController) GetEffective(c *gin.Context) {
 		return
 	}
 
-	item, err := ct.DB.GetWithholdingTaxDefault(depotID, countryCode)
+	item, err := ct.DB.GetEffectiveWithholdingTaxDefault(groupID, depotID, countryCode)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -222,12 +343,25 @@ func (ct WithholdingTaxDefaultsController) GetByID(c *gin.Context) {
 		return
 	}
 
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	groupID, ok := parseWithholdingTaxContextGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureGroupMember(c, userID, groupID) {
+		return
+	}
+
 	id, ok := parseWithholdingTaxDefaultID(c)
 	if !ok {
 		return
 	}
 
-	item, err := ct.DB.GetWithholdingTaxDefaultByID(id)
+	item, err := ct.DB.GetWithholdingTaxDefaultByIDAndGroupID(id, groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -252,6 +386,12 @@ func (ct WithholdingTaxDefaultsController) PostAdd(c *gin.Context) {
 		return
 	}
 
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
 	var req addWithholdingTaxDefaultRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
@@ -259,6 +399,7 @@ func (ct WithholdingTaxDefaultsController) PostAdd(c *gin.Context) {
 	}
 
 	item, message := normalizeWithholdingTaxDefaultPayload(db.WithholdingTaxDefault{
+		GroupID:                            req.ContextGroupID,
 		DepotID:                            req.DepotID,
 		CountryCode:                        req.CountryCode,
 		CountryName:                        req.CountryName,
@@ -267,6 +408,9 @@ func (ct WithholdingTaxDefaultsController) PostAdd(c *gin.Context) {
 	})
 	if message != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": message})
+		return
+	}
+	if !ct.ensureCanEditWithholdingTaxDefault(c, userID, item) {
 		return
 	}
 
@@ -290,24 +434,34 @@ func (ct WithholdingTaxDefaultsController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	id, ok := parseWithholdingTaxDefaultID(c)
+	userID, ok := ct.currentSessionUserID(c)
 	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
 
-	existing, err := ct.DB.GetWithholdingTaxDefaultByID(id)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if existing == nil {
-		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "WITHHOLDING_TAX_DEFAULT_NOT_FOUND"})
+	id, ok := parseWithholdingTaxDefaultID(c)
+	if !ok {
 		return
 	}
 
 	var req updateWithholdingTaxDefaultRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	existing, err := ct.DB.GetWithholdingTaxDefaultByIDAndGroupID(id, req.ContextGroupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if existing == nil {
+		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "WITHHOLDING_TAX_DEFAULT_NOT_FOUND"})
 		return
 	}
 
@@ -333,6 +487,9 @@ func (ct WithholdingTaxDefaultsController) PostUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": message})
 		return
 	}
+	if !ct.ensureCanEditWithholdingTaxDefault(c, userID, updated) {
+		return
+	}
 
 	if err := ct.DB.UpdateWithholdingTaxDefault(&updated); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
@@ -354,12 +511,38 @@ func (ct WithholdingTaxDefaultsController) PostDelete(c *gin.Context) {
 		return
 	}
 
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
 	id, ok := parseWithholdingTaxDefaultID(c)
 	if !ok {
 		return
 	}
 
-	item, err := ct.DB.GetWithholdingTaxDefaultByID(id)
+	var req deleteWithholdingTaxDefaultRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	allowed, err := ct.G.CanDo(userID, db.EntityTypeGroup, "withholding-tax-default:delete", req.ContextGroupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	item, err := ct.DB.GetWithholdingTaxDefaultByIDAndGroupID(id, req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -369,7 +552,7 @@ func (ct WithholdingTaxDefaultsController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	if err := ct.DB.DeleteWithholdingTaxDefault(id); err != nil {
+	if err := ct.DB.DeleteWithholdingTaxDefaultByIDAndGroupID(id, req.ContextGroupID); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}

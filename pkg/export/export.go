@@ -96,7 +96,7 @@ func buildExportJSON(database *db.DB) ([]byte, error) {
 		return nil, fmt.Errorf("export currencies: %w", err)
 	}
 
-	withholdingTaxDefaults, err := database.ListWithholdingTaxDefaults()
+	withholdingTaxDefaults, err := database.ListAllWithholdingTaxDefaultsForExport()
 	if err != nil {
 		return nil, fmt.Errorf("export withholding_tax_defaults: %w", err)
 	}

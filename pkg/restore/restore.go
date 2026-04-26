@@ -159,16 +159,12 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 		}
 	}
 
-	// 7. Insert withholding_tax_defaults (depot_id is nullable: 0 → NULL).
+	// 7. Insert withholding_tax_defaults (depot_id = 0 means group fallback).
 	for _, w := range doc.Data.WithholdingTaxDefaults {
-		var depotID interface{}
-		if w.DepotID > 0 {
-			depotID = w.DepotID
-		}
 		if _, err := tx.Exec(`
-INSERT INTO withholding_tax_defaults (id, depot_id, country_code, country_name, withholding_tax_percent_default, withholding_tax_percent_credit_default, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-`, w.ID, depotID, w.CountryCode, w.CountryName, w.WithholdingTaxPercentDefault, w.WithholdingTaxPercentCreditDefault, w.CreatedAt, w.UpdatedAt); err != nil {
+INSERT INTO withholding_tax_defaults (id, group_id, depot_id, country_code, country_name, withholding_tax_percent_default, withholding_tax_percent_credit_default, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+`, w.ID, w.GroupID, w.DepotID, w.CountryCode, w.CountryName, w.WithholdingTaxPercentDefault, w.WithholdingTaxPercentCreditDefault, w.CreatedAt, w.UpdatedAt); err != nil {
 			return fmt.Errorf("IMPORT_FAILED: insert withholding_tax_default id=%d: %w", w.ID, err)
 		}
 	}

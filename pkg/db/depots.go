@@ -384,9 +384,24 @@ func (d *DB) DeleteDepot(id int64) error {
 		return fmt.Errorf("id must be > 0")
 	}
 
-	_, err := d.SQL.Exec(`DELETE FROM depots WHERE id = ?;`, id)
+	tx, err := d.SQL.Begin()
+	if err != nil {
+		return fmt.Errorf("delete depot begin: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(`DELETE FROM withholding_tax_defaults WHERE depot_id = ?;`, id); err != nil {
+		return fmt.Errorf("delete depot withholding tax defaults: %w", err)
+	}
+
+	_, err = tx.Exec(`DELETE FROM depots WHERE id = ?;`, id)
 	if err != nil {
 		return fmt.Errorf("delete depot: %w", err)
 	}
+
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("delete depot commit: %w", err)
+	}
+
 	return nil
 }
