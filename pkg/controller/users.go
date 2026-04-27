@@ -68,6 +68,10 @@ type deleteUserRequest struct {
 	ContextGroupID int64 `json:"ContextGroupID"`
 }
 
+type activeGroupRequest struct {
+	ContextGroupID int64 `json:"ContextGroupID"`
+}
+
 // ensureAuthorized performs its package-specific operation.
 func (ct UsersController) ensureAuthorized(c *gin.Context) bool {
 	if ct.DB == nil || ct.DB.SQL == nil {
@@ -107,6 +111,13 @@ func (ct UsersController) currentSessionUserID(c *gin.Context) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func userSettingsValue(u db.User) db.UserSettings {
+	if u.Settings == nil {
+		return db.UserSettings{}
+	}
+	return *u.Settings
 }
 
 // canManageUser checks whether sessionUserID may perform action on users in groupID.
@@ -627,5 +638,72 @@ func (ct UsersController) PostDelete(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
 		"message": "USER_DELETED",
+	})
+}
+
+// POST /api/users/active-group
+func (ct UsersController) PostActiveGroup(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	var req activeGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	inGroup, err := ct.DB.IsUserInGroup(req.ContextGroupID, sessionUserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !inGroup {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	current, found, err := ct.DB.GetUserByID(ctx, sessionUserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !found {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	settings := userSettingsValue(current)
+	settings.LastActiveGroupID = int(req.ContextGroupID)
+
+	updated, err := ct.DB.UpdateUserSettings(ctx, sessionUserID, settings)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !updated {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success":           true,
+		"LastActiveGroupID": settings.LastActiveGroupID,
 	})
 }

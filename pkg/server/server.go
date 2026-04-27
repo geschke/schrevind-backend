@@ -58,6 +58,8 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/users/update-password/:id", usersCtl.Options)
 		router.POST("/api/users/delete/:id", usersCtl.PostDelete)
 		router.OPTIONS("/api/users/delete/:id", usersCtl.Options)
+		router.POST("/api/users/active-group", usersCtl.PostActiveGroup)
+		router.OPTIONS("/api/users/active-group", usersCtl.Options)
 
 		depotsCtl := controller.NewDepotsController(database, store, sessionName, g)
 		router.GET("/api/depots/list", depotsCtl.GetList)

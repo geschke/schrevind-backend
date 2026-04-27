@@ -98,10 +98,18 @@ func Run(database *db.DB, doc *export.ExportDoc) error {
 
 	// 1. Insert users.
 	for _, u := range doc.Data.Users {
+		settings := "{}"
+		if u.Settings != nil {
+			rawSettings, err := json.Marshal(u.Settings)
+			if err != nil {
+				return fmt.Errorf("IMPORT_FAILED: encode user settings id=%d: %w", u.ID, err)
+			}
+			settings = string(rawSettings)
+		}
 		if _, err := tx.Exec(`
-INSERT INTO users (id, password, firstname, lastname, email, locale, status, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
-`, u.ID, u.Password, u.FirstName, u.LastName, u.Email, u.Locale, u.Status, u.CreatedAt, u.UpdatedAt); err != nil {
+INSERT INTO users (id, password, firstname, lastname, email, locale, status, settings, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+`, u.ID, u.Password, u.FirstName, u.LastName, u.Email, u.Locale, u.Status, settings, u.CreatedAt, u.UpdatedAt); err != nil {
 			return fmt.Errorf("IMPORT_FAILED: insert user id=%d: %w", u.ID, err)
 		}
 	}

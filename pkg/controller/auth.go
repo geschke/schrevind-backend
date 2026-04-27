@@ -37,6 +37,13 @@ type loginRequest struct {
 	ReturnSecureToken bool   `json:"returnSecureToken"`
 }
 
+func lastActiveGroupIDFromUser(u db.User) int {
+	if u.Settings == nil {
+		return 0
+	}
+	return u.Settings.LastActiveGroupID
+}
+
 // OptionsLogin handles the CORS preflight request.
 func (ct AuthController) OptionsLogin(c *gin.Context) {
 	// Allow preflight for browser-based clients.
@@ -148,14 +155,15 @@ func (ct AuthController) PostLogin(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":   true,
-		"id":        strconv.FormatInt(u.ID, 10),
-		"email":     u.Email,
-		"firstname": u.FirstName,
-		"lastname":  u.LastName,
-		"locale":    u.Locale,
-		"session":   "cookie",
-		"groups":    groups,
+		"success":           true,
+		"id":                strconv.FormatInt(u.ID, 10),
+		"email":             u.Email,
+		"firstname":         u.FirstName,
+		"lastname":          u.LastName,
+		"locale":            u.Locale,
+		"session":           "cookie",
+		"groups":            groups,
+		"LastActiveGroupID": lastActiveGroupIDFromUser(u),
 	})
 }
 
@@ -261,7 +269,12 @@ func (ct AuthController) GetMe(c *gin.Context) {
 		return
 	}
 
-	c.JSON(http.StatusOK, gin.H{"success": true, "item": u, "groups": groups})
+	c.JSON(http.StatusOK, gin.H{
+		"success":           true,
+		"item":              u,
+		"groups":            groups,
+		"LastActiveGroupID": lastActiveGroupIDFromUser(u),
+	})
 }
 
 // parseSameSite performs its package-specific operation.

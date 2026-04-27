@@ -73,6 +73,7 @@ CREATE TABLE IF NOT EXISTS users (
   email         TEXT NOT NULL DEFAULT '',
   locale        TEXT NOT NULL DEFAULT 'en-US',
   status        TEXT NOT NULL DEFAULT 'active',
+  settings      TEXT NOT NULL DEFAULT '{}',
   created_at    INTEGER NOT NULL DEFAULT 0,
   updated_at    INTEGER NOT NULL DEFAULT 0
 );

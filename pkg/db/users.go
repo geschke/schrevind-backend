@@ -3,21 +3,48 @@ package db
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 )
 
+type UserSettings struct {
+	LastActiveGroupID int `json:"LastActiveGroupID"`
+}
+
 type User struct {
-	ID        int64  `json:"ID"`
-	Password  string `json:"Password,omitempty"`
-	FirstName string `json:"FirstName,omitempty"`
-	LastName  string `json:"LastName,omitempty"`
-	Email     string `json:"Email,omitempty"`
-	Locale    string `json:"Locale,omitempty"`
-	Status    string `json:"Status,omitempty"`
-	CreatedAt int64  `json:"CreatedAt,omitempty"`
-	UpdatedAt int64  `json:"UpdatedAt,omitempty"`
+	ID        int64         `json:"ID"`
+	Password  string        `json:"Password,omitempty"`
+	FirstName string        `json:"FirstName,omitempty"`
+	LastName  string        `json:"LastName,omitempty"`
+	Email     string        `json:"Email,omitempty"`
+	Locale    string        `json:"Locale,omitempty"`
+	Status    string        `json:"Status,omitempty"`
+	Settings  *UserSettings `json:"Settings,omitempty"`
+	CreatedAt int64         `json:"CreatedAt,omitempty"`
+	UpdatedAt int64         `json:"UpdatedAt,omitempty"`
+}
+
+func parseUserSettings(raw string) UserSettings {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return UserSettings{}
+	}
+
+	var settings UserSettings
+	if err := json.Unmarshal([]byte(raw), &settings); err != nil {
+		return UserSettings{}
+	}
+	return settings
+}
+
+func encodeUserSettings(settings UserSettings) (string, error) {
+	raw, err := json.Marshal(settings)
+	if err != nil {
+		return "", err
+	}
+	return string(raw), nil
 }
 
 func normalizeUserLocale(locale string) string {
@@ -83,6 +110,7 @@ INSERT INTO users (
 // scanUser performs its package-specific operation.
 func scanUser(row *sql.Row) (User, error) {
 	var u User
+	var rawSettings string
 	if err := row.Scan(
 		&u.ID,
 		&u.Password,
@@ -91,11 +119,14 @@ func scanUser(row *sql.Row) (User, error) {
 		&u.Email,
 		&u.Locale,
 		&u.Status,
+		&rawSettings,
 		&u.CreatedAt,
 		&u.UpdatedAt,
 	); err != nil {
 		return User{}, err
 	}
+	settings := parseUserSettings(rawSettings)
+	u.Settings = &settings
 	return u, nil
 }
 
@@ -109,7 +140,7 @@ func (d *DB) GetUserByID(ctx context.Context, id int64) (User, bool, error) {
 	}
 
 	row := d.SQL.QueryRowContext(ctx, `
-SELECT id, password, firstname, lastname, email, locale, status, created_at, updated_at
+SELECT id, password, firstname, lastname, email, locale, status, settings, created_at, updated_at
   FROM users
  WHERE id = ?
  LIMIT 1;
@@ -138,7 +169,7 @@ func (d *DB) GetUserByEmail(ctx context.Context, email string) (User, bool, erro
 	}
 
 	row := d.SQL.QueryRowContext(ctx, `
-SELECT id, password, firstname, lastname, email, locale, status, created_at, updated_at
+SELECT id, password, firstname, lastname, email, locale, status, settings, created_at, updated_at
   FROM users
  WHERE email = ?
  LIMIT 1;
@@ -229,6 +260,49 @@ UPDATE users
 	return true, nil
 }
 
+// UpdateUserSettings replaces the serialized settings JSON for a user.
+func (d *DB) UpdateUserSettings(ctx context.Context, userID int64, settings UserSettings) (bool, error) {
+	if d == nil || d.SQL == nil {
+		return false, fmt.Errorf("db not initialized")
+	}
+	if userID <= 0 {
+		return false, fmt.Errorf("userID must be > 0")
+	}
+
+	rawSettings, err := encodeUserSettings(settings)
+	if err != nil {
+		return false, fmt.Errorf("encode user settings: %w", err)
+	}
+
+	res, err := d.SQL.ExecContext(ctx, `
+UPDATE users
+   SET settings = ?,
+       updated_at = ?
+ WHERE id = ?;
+`, rawSettings, time.Now().Unix(), userID)
+	if err != nil {
+		return false, fmt.Errorf("update user settings: %w", err)
+	}
+
+	affected, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("update user settings rows affected: %w", err)
+	}
+	if affected > 0 {
+		return true, nil
+	}
+
+	var one int
+	err = d.SQL.QueryRowContext(ctx, `SELECT 1 FROM users WHERE id = ? LIMIT 1;`, userID).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("update user settings existence check: %w", err)
+	}
+	return true, nil
+}
+
 // DeleteUser deletes the user record by ID.
 // Returns true if a row was deleted, false if the user was not found.
 func (d *DB) DeleteUser(ctx context.Context, id int64) (bool, error) {
@@ -299,7 +373,7 @@ func (d *DB) ListAllUsersForExport(ctx context.Context) ([]User, error) {
 	}
 
 	rows, err := d.SQL.QueryContext(ctx, `
-SELECT id, password, firstname, lastname, email, locale, status, created_at, updated_at
+SELECT id, password, firstname, lastname, email, locale, status, settings, created_at, updated_at
   FROM users
  ORDER BY id ASC;
 `)
@@ -311,6 +385,7 @@ SELECT id, password, firstname, lastname, email, locale, status, created_at, upd
 	out := make([]User, 0)
 	for rows.Next() {
 		var u User
+		var rawSettings string
 		if err := rows.Scan(
 			&u.ID,
 			&u.Password,
@@ -319,11 +394,14 @@ SELECT id, password, firstname, lastname, email, locale, status, created_at, upd
 			&u.Email,
 			&u.Locale,
 			&u.Status,
+			&rawSettings,
 			&u.CreatedAt,
 			&u.UpdatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("scan user for export: %w", err)
 		}
+		settings := parseUserSettings(rawSettings)
+		u.Settings = &settings
 		out = append(out, u)
 	}
 	if err := rows.Err(); err != nil {
