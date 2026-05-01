@@ -10,7 +10,15 @@ import (
 )
 
 type UserSettings struct {
-	LastActiveGroupID int `json:"LastActiveGroupID"`
+	LastActiveGroupID int    `json:"LastActiveGroupID"`
+	Theme             string `json:"Theme"`
+	InlandTaxTemplate string `json:"InlandTaxTemplate"`
+}
+
+type UserSettingsUpdate struct {
+	LastActiveGroupID *int    `json:"LastActiveGroupID,omitempty"`
+	Theme             *string `json:"Theme,omitempty"`
+	InlandTaxTemplate *string `json:"InlandTaxTemplate,omitempty"`
 }
 
 type User struct {

@@ -58,8 +58,8 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/users/update-password/:id", usersCtl.Options)
 		router.POST("/api/users/delete/:id", usersCtl.PostDelete)
 		router.OPTIONS("/api/users/delete/:id", usersCtl.Options)
-		router.POST("/api/users/active-group", usersCtl.PostActiveGroup)
-		router.OPTIONS("/api/users/active-group", usersCtl.Options)
+		router.POST("/api/users/settings", usersCtl.PostSettings)
+		router.OPTIONS("/api/users/settings", usersCtl.Options)
 
 		depotsCtl := controller.NewDepotsController(database, store, sessionName, g)
 		router.GET("/api/depots/list", depotsCtl.GetList)
@@ -122,6 +122,12 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/withholding-tax-defaults/update/:id", withholdingTaxDefaultsCtl.Options)
 		router.POST("/api/withholding-tax-defaults/delete/:id", withholdingTaxDefaultsCtl.PostDelete)
 		router.OPTIONS("/api/withholding-tax-defaults/delete/:id", withholdingTaxDefaultsCtl.Options)
+
+		inlandTaxTemplatesCtl := controller.NewInlandTaxTemplatesController(database, store, sessionName)
+		router.GET("/api/inland-tax-templates", inlandTaxTemplatesCtl.GetList)
+		router.OPTIONS("/api/inland-tax-templates", inlandTaxTemplatesCtl.Options)
+		router.GET("/api/inland-tax-templates/:template", inlandTaxTemplatesCtl.GetByTemplate)
+		router.OPTIONS("/api/inland-tax-templates/:template", inlandTaxTemplatesCtl.Options)
 
 		exportsCtl := controller.NewExportsController(database, store, sessionName)
 		router.POST("/api/exports/start", exportsCtl.PostStart)

@@ -7,6 +7,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
+	"unicode/utf8"
 
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/cors"
@@ -68,10 +70,6 @@ type deleteUserRequest struct {
 	ContextGroupID int64 `json:"ContextGroupID"`
 }
 
-type activeGroupRequest struct {
-	ContextGroupID int64 `json:"ContextGroupID"`
-}
-
 // ensureAuthorized performs its package-specific operation.
 func (ct UsersController) ensureAuthorized(c *gin.Context) bool {
 	if ct.DB == nil || ct.DB.SQL == nil {
@@ -118,6 +116,28 @@ func userSettingsValue(u db.User) db.UserSettings {
 		return db.UserSettings{}
 	}
 	return *u.Settings
+}
+
+func validateUserTheme(theme string) (string, bool) {
+	theme = strings.TrimSpace(theme)
+	if utf8.RuneCountInString(theme) > 50 {
+		return "", false
+	}
+	for _, r := range theme {
+		if unicode.IsControl(r) {
+			return "", false
+		}
+	}
+	return theme, true
+}
+
+func validateUserInlandTaxTemplate(template string) (string, bool) {
+	template = strings.ToUpper(strings.TrimSpace(template))
+	if template == "" {
+		return "", true
+	}
+	_, ok := db.InlandTaxTemplates[template]
+	return template, ok
 }
 
 // canManageUser checks whether sessionUserID may perform action on users in groupID.
@@ -641,8 +661,8 @@ func (ct UsersController) PostDelete(c *gin.Context) {
 	})
 }
 
-// POST /api/users/active-group
-func (ct UsersController) PostActiveGroup(c *gin.Context) {
+// POST /api/users/settings
+func (ct UsersController) PostSettings(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
 		return
 	}
@@ -656,23 +676,9 @@ func (ct UsersController) PostActiveGroup(c *gin.Context) {
 		return
 	}
 
-	var req activeGroupRequest
+	var req db.UserSettingsUpdate
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
-		return
-	}
-	if req.ContextGroupID <= 0 {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
-		return
-	}
-
-	inGroup, err := ct.DB.IsUserInGroup(req.ContextGroupID, sessionUserID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !inGroup {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return
 	}
 
@@ -690,7 +696,40 @@ func (ct UsersController) PostActiveGroup(c *gin.Context) {
 	}
 
 	settings := userSettingsValue(current)
-	settings.LastActiveGroupID = int(req.ContextGroupID)
+	if req.LastActiveGroupID != nil {
+		if *req.LastActiveGroupID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+			return
+		}
+
+		inGroup, err := ct.DB.IsUserInGroup(int64(*req.LastActiveGroupID), sessionUserID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !inGroup {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
+
+		settings.LastActiveGroupID = *req.LastActiveGroupID
+	}
+	if req.Theme != nil {
+		theme, ok := validateUserTheme(*req.Theme)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_THEME"})
+			return
+		}
+		settings.Theme = theme
+	}
+	if req.InlandTaxTemplate != nil {
+		template, ok := validateUserInlandTaxTemplate(*req.InlandTaxTemplate)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_INLAND_TAX_TEMPLATE"})
+			return
+		}
+		settings.InlandTaxTemplate = template
+	}
 
 	updated, err := ct.DB.UpdateUserSettings(ctx, sessionUserID, settings)
 	if err != nil {
@@ -703,7 +742,7 @@ func (ct UsersController) PostActiveGroup(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":           true,
-		"LastActiveGroupID": settings.LastActiveGroupID,
+		"success":  true,
+		"settings": settings,
 	})
 }

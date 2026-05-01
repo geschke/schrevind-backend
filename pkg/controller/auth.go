@@ -37,11 +37,11 @@ type loginRequest struct {
 	ReturnSecureToken bool   `json:"returnSecureToken"`
 }
 
-func lastActiveGroupIDFromUser(u db.User) int {
+func settingsFromUser(u db.User) db.UserSettings {
 	if u.Settings == nil {
-		return 0
+		return db.UserSettings{}
 	}
-	return u.Settings.LastActiveGroupID
+	return *u.Settings
 }
 
 // OptionsLogin handles the CORS preflight request.
@@ -155,15 +155,15 @@ func (ct AuthController) PostLogin(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":           true,
-		"id":                strconv.FormatInt(u.ID, 10),
-		"email":             u.Email,
-		"firstname":         u.FirstName,
-		"lastname":          u.LastName,
-		"locale":            u.Locale,
-		"session":           "cookie",
-		"groups":            groups,
-		"LastActiveGroupID": lastActiveGroupIDFromUser(u),
+		"success":   true,
+		"id":        strconv.FormatInt(u.ID, 10),
+		"email":     u.Email,
+		"firstname": u.FirstName,
+		"lastname":  u.LastName,
+		"locale":    u.Locale,
+		"session":   "cookie",
+		"groups":    groups,
+		"Settings":  settingsFromUser(u),
 	})
 }
 
@@ -270,10 +270,9 @@ func (ct AuthController) GetMe(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, gin.H{
-		"success":           true,
-		"item":              u,
-		"groups":            groups,
-		"LastActiveGroupID": lastActiveGroupIDFromUser(u),
+		"success": true,
+		"item":    u,
+		"groups":  groups,
 	})
 }
 

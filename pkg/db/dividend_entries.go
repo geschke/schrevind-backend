@@ -2,6 +2,7 @@ package db
 
 import (
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -47,6 +48,10 @@ type DividendEntry struct {
 	WithholdingTaxAmountRefundable         string `json:"WithholdingTaxAmountRefundable,omitempty"`
 	WithholdingTaxAmountRefundableCurrency string `json:"WithholdingTaxAmountRefundableCurrency,omitempty"`
 
+	InlandTaxAmount   string            `json:"InlandTaxAmount,omitempty"`
+	InlandTaxCurrency string            `json:"InlandTaxCurrency,omitempty"`
+	InlandTaxDetails  []InlandTaxDetail `json:"InlandTaxDetails,omitempty"`
+
 	ForeignFeesAmount   string `json:"ForeignFeesAmount,omitempty"`
 	ForeignFeesCurrency string `json:"ForeignFeesCurrency,omitempty"`
 
@@ -57,6 +62,37 @@ type DividendEntry struct {
 
 	CreatedAt int64 `json:"CreatedAt,omitempty"`
 	UpdatedAt int64 `json:"UpdatedAt,omitempty"`
+}
+
+func EncodeInlandTaxDetails(details []InlandTaxDetail) (string, error) {
+	if len(details) == 0 {
+		return "[]", nil
+	}
+
+	raw, err := json.Marshal(details)
+	if err != nil {
+		return "", fmt.Errorf("encode inland tax details: %w", err)
+	}
+	return string(raw), nil
+}
+
+func decodeInlandTaxDetails(raw string) ([]InlandTaxDetail, error) {
+	raw = strings.TrimSpace(raw)
+	if raw == "" {
+		return nil, nil
+	}
+
+	var details []InlandTaxDetail
+	if err := json.Unmarshal([]byte(raw), &details); err == nil {
+		return details, nil
+	}
+
+	var object map[string]any
+	if err := json.Unmarshal([]byte(raw), &object); err == nil && len(object) == 0 {
+		return nil, nil
+	}
+
+	return nil, fmt.Errorf("decode inland tax details: invalid JSON array")
 }
 
 // normalizeDividendEntry performs its package-specific operation.
@@ -84,6 +120,14 @@ func normalizeDividendEntry(entry DividendEntry) (DividendEntry, error) {
 	entry.WithholdingTaxAmountCreditCurrency = strings.TrimSpace(entry.WithholdingTaxAmountCreditCurrency)
 	entry.WithholdingTaxAmountRefundable = strings.TrimSpace(entry.WithholdingTaxAmountRefundable)
 	entry.WithholdingTaxAmountRefundableCurrency = strings.TrimSpace(entry.WithholdingTaxAmountRefundableCurrency)
+	entry.InlandTaxAmount = strings.TrimSpace(entry.InlandTaxAmount)
+	entry.InlandTaxCurrency = strings.TrimSpace(entry.InlandTaxCurrency)
+	for i := range entry.InlandTaxDetails {
+		entry.InlandTaxDetails[i].Code = strings.TrimSpace(entry.InlandTaxDetails[i].Code)
+		entry.InlandTaxDetails[i].Label = strings.TrimSpace(entry.InlandTaxDetails[i].Label)
+		entry.InlandTaxDetails[i].Amount = strings.TrimSpace(entry.InlandTaxDetails[i].Amount)
+		entry.InlandTaxDetails[i].Currency = strings.TrimSpace(entry.InlandTaxDetails[i].Currency)
+	}
 	entry.ForeignFeesAmount = strings.TrimSpace(entry.ForeignFeesAmount)
 	entry.ForeignFeesCurrency = strings.TrimSpace(entry.ForeignFeesCurrency)
 	entry.Note = strings.TrimSpace(entry.Note)
@@ -111,11 +155,13 @@ const dividendEntrySelectColumns = `
        quantity, dividend_per_unit_amount, dividend_per_unit_currency, fx_rate_label, fx_rate, gross_amount, gross_currency,
        payout_amount, payout_currency, withholding_tax_country_code, withholding_tax_percent, withholding_tax_amount,
        withholding_tax_currency, withholding_tax_amount_credit, withholding_tax_amount_credit_currency,
-       withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, foreign_fees_amount, foreign_fees_currency,
+       withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, inland_tax_amount, inland_tax_currency,
+       inland_tax_details, foreign_fees_amount, foreign_fees_currency,
        note, calc_gross_amount_base, calc_after_withholding_amount_base, created_at, updated_at`
 
 func scanDividendEntry(row *sql.Row) (DividendEntry, error) {
 	var e DividendEntry
+	var inlandTaxDetails string
 	if err := row.Scan(
 		&e.ID,
 		&e.DepotID,
@@ -143,6 +189,9 @@ func scanDividendEntry(row *sql.Row) (DividendEntry, error) {
 		&e.WithholdingTaxAmountCreditCurrency,
 		&e.WithholdingTaxAmountRefundable,
 		&e.WithholdingTaxAmountRefundableCurrency,
+		&e.InlandTaxAmount,
+		&e.InlandTaxCurrency,
+		&inlandTaxDetails,
 		&e.ForeignFeesAmount,
 		&e.ForeignFeesCurrency,
 		&e.Note,
@@ -153,11 +202,17 @@ func scanDividendEntry(row *sql.Row) (DividendEntry, error) {
 	); err != nil {
 		return DividendEntry{}, err
 	}
+	details, err := decodeInlandTaxDetails(inlandTaxDetails)
+	if err != nil {
+		return DividendEntry{}, err
+	}
+	e.InlandTaxDetails = details
 	return e, nil
 }
 
 func scanDividendEntryRow(rows *sql.Rows) (DividendEntry, error) {
 	var e DividendEntry
+	var inlandTaxDetails string
 	if err := rows.Scan(
 		&e.ID,
 		&e.DepotID,
@@ -185,6 +240,9 @@ func scanDividendEntryRow(rows *sql.Rows) (DividendEntry, error) {
 		&e.WithholdingTaxAmountCreditCurrency,
 		&e.WithholdingTaxAmountRefundable,
 		&e.WithholdingTaxAmountRefundableCurrency,
+		&e.InlandTaxAmount,
+		&e.InlandTaxCurrency,
+		&inlandTaxDetails,
 		&e.ForeignFeesAmount,
 		&e.ForeignFeesCurrency,
 		&e.Note,
@@ -195,6 +253,11 @@ func scanDividendEntryRow(rows *sql.Rows) (DividendEntry, error) {
 	); err != nil {
 		return DividendEntry{}, err
 	}
+	details, err := decodeInlandTaxDetails(inlandTaxDetails)
+	if err != nil {
+		return DividendEntry{}, err
+	}
+	e.InlandTaxDetails = details
 	return e, nil
 }
 
@@ -331,6 +394,10 @@ func (d *DB) CreateDividendEntry(entry *DividendEntry) error {
 	if err != nil {
 		return err
 	}
+	inlandTaxDetails, err := EncodeInlandTaxDetails(normalized.InlandTaxDetails)
+	if err != nil {
+		return err
+	}
 
 	res, err := d.SQL.Exec(`
 INSERT INTO dividend_entries (
@@ -338,10 +405,11 @@ INSERT INTO dividend_entries (
   quantity, dividend_per_unit_amount, dividend_per_unit_currency, fx_rate_label, fx_rate, gross_amount, gross_currency,
   payout_amount, payout_currency, withholding_tax_country_code, withholding_tax_percent, withholding_tax_amount,
   withholding_tax_currency, withholding_tax_amount_credit, withholding_tax_amount_credit_currency,
-  withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, foreign_fees_amount, foreign_fees_currency,
+  withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, inland_tax_amount, inland_tax_currency,
+  inland_tax_details, foreign_fees_amount, foreign_fees_currency,
   note, calc_gross_amount_base, calc_after_withholding_amount_base, created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
-`, normalized.DepotID, normalized.SecurityID, normalized.PayDate, normalized.ExDate, normalized.SecurityName, normalized.SecurityISIN, normalized.SecurityWKN, normalized.SecuritySymbol, normalized.Quantity, normalized.DividendPerUnitAmount, normalized.DividendPerUnitCurrency, normalized.FXRateLabel, normalized.FXRate, normalized.GrossAmount, normalized.GrossCurrency, normalized.PayoutAmount, normalized.PayoutCurrency, normalized.WithholdingTaxCountryCode, normalized.WithholdingTaxPercent, normalized.WithholdingTaxAmount, normalized.WithholdingTaxCurrency, normalized.WithholdingTaxAmountCredit, normalized.WithholdingTaxAmountCreditCurrency, normalized.WithholdingTaxAmountRefundable, normalized.WithholdingTaxAmountRefundableCurrency, normalized.ForeignFeesAmount, normalized.ForeignFeesCurrency, normalized.Note, normalized.CalcGrossAmountBase, normalized.CalcAfterWithholdingAmountBase, normalized.CreatedAt, normalized.UpdatedAt)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+`, normalized.DepotID, normalized.SecurityID, normalized.PayDate, normalized.ExDate, normalized.SecurityName, normalized.SecurityISIN, normalized.SecurityWKN, normalized.SecuritySymbol, normalized.Quantity, normalized.DividendPerUnitAmount, normalized.DividendPerUnitCurrency, normalized.FXRateLabel, normalized.FXRate, normalized.GrossAmount, normalized.GrossCurrency, normalized.PayoutAmount, normalized.PayoutCurrency, normalized.WithholdingTaxCountryCode, normalized.WithholdingTaxPercent, normalized.WithholdingTaxAmount, normalized.WithholdingTaxCurrency, normalized.WithholdingTaxAmountCredit, normalized.WithholdingTaxAmountCreditCurrency, normalized.WithholdingTaxAmountRefundable, normalized.WithholdingTaxAmountRefundableCurrency, normalized.InlandTaxAmount, normalized.InlandTaxCurrency, inlandTaxDetails, normalized.ForeignFeesAmount, normalized.ForeignFeesCurrency, normalized.Note, normalized.CalcGrossAmountBase, normalized.CalcAfterWithholdingAmountBase, normalized.CreatedAt, normalized.UpdatedAt)
 	if err != nil {
 		return fmt.Errorf("create dividend entry: %w", err)
 	}
@@ -369,6 +437,10 @@ func (d *DB) UpdateDividendEntry(entry *DividendEntry) error {
 	}
 
 	normalized, err := normalizeDividendEntry(*entry)
+	if err != nil {
+		return err
+	}
+	inlandTaxDetails, err := EncodeInlandTaxDetails(normalized.InlandTaxDetails)
 	if err != nil {
 		return err
 	}
@@ -400,6 +472,9 @@ UPDATE dividend_entries
        withholding_tax_amount_credit_currency = ?,
        withholding_tax_amount_refundable = ?,
        withholding_tax_amount_refundable_currency = ?,
+       inland_tax_amount = ?,
+       inland_tax_currency = ?,
+       inland_tax_details = ?,
        foreign_fees_amount = ?,
        foreign_fees_currency = ?,
        note = ?,
@@ -407,7 +482,7 @@ UPDATE dividend_entries
        calc_after_withholding_amount_base = ?,
        updated_at = ?
  WHERE id = ?;
-`, normalized.DepotID, normalized.SecurityID, normalized.PayDate, normalized.ExDate, normalized.SecurityName, normalized.SecurityISIN, normalized.SecurityWKN, normalized.SecuritySymbol, normalized.Quantity, normalized.DividendPerUnitAmount, normalized.DividendPerUnitCurrency, normalized.FXRateLabel, normalized.FXRate, normalized.GrossAmount, normalized.GrossCurrency, normalized.PayoutAmount, normalized.PayoutCurrency, normalized.WithholdingTaxCountryCode, normalized.WithholdingTaxPercent, normalized.WithholdingTaxAmount, normalized.WithholdingTaxCurrency, normalized.WithholdingTaxAmountCredit, normalized.WithholdingTaxAmountCreditCurrency, normalized.WithholdingTaxAmountRefundable, normalized.WithholdingTaxAmountRefundableCurrency, normalized.ForeignFeesAmount, normalized.ForeignFeesCurrency, normalized.Note, normalized.CalcGrossAmountBase, normalized.CalcAfterWithholdingAmountBase, normalized.UpdatedAt, normalized.ID)
+`, normalized.DepotID, normalized.SecurityID, normalized.PayDate, normalized.ExDate, normalized.SecurityName, normalized.SecurityISIN, normalized.SecurityWKN, normalized.SecuritySymbol, normalized.Quantity, normalized.DividendPerUnitAmount, normalized.DividendPerUnitCurrency, normalized.FXRateLabel, normalized.FXRate, normalized.GrossAmount, normalized.GrossCurrency, normalized.PayoutAmount, normalized.PayoutCurrency, normalized.WithholdingTaxCountryCode, normalized.WithholdingTaxPercent, normalized.WithholdingTaxAmount, normalized.WithholdingTaxCurrency, normalized.WithholdingTaxAmountCredit, normalized.WithholdingTaxAmountCreditCurrency, normalized.WithholdingTaxAmountRefundable, normalized.WithholdingTaxAmountRefundableCurrency, normalized.InlandTaxAmount, normalized.InlandTaxCurrency, inlandTaxDetails, normalized.ForeignFeesAmount, normalized.ForeignFeesCurrency, normalized.Note, normalized.CalcGrossAmountBase, normalized.CalcAfterWithholdingAmountBase, normalized.UpdatedAt, normalized.ID)
 	if err != nil {
 		return fmt.Errorf("update dividend entry: %w", err)
 	}

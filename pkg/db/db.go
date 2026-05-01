@@ -213,6 +213,10 @@ CREATE TABLE IF NOT EXISTS dividend_entries (
   withholding_tax_amount_refundable        TEXT NOT NULL DEFAULT '',
   withholding_tax_amount_refundable_currency TEXT NOT NULL DEFAULT '',
 
+  inland_tax_amount                        TEXT NOT NULL DEFAULT '',
+  inland_tax_currency                      TEXT NOT NULL DEFAULT '',
+  inland_tax_details                       TEXT NOT NULL DEFAULT '',
+
   foreign_fees_amount                      TEXT NOT NULL DEFAULT '',
   foreign_fees_currency                    TEXT NOT NULL DEFAULT '',
 

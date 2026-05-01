@@ -53,13 +53,20 @@ func TestUserSettingsDefaultToZero(t *testing.T) {
 	if user.Settings.LastActiveGroupID != 0 {
 		t.Fatalf("LastActiveGroupID = %d, want 0", user.Settings.LastActiveGroupID)
 	}
+	if user.Settings.InlandTaxTemplate != "" {
+		t.Fatalf("InlandTaxTemplate = %q, want empty", user.Settings.InlandTaxTemplate)
+	}
 }
 
-func TestUpdateUserSettingsStoresLastActiveGroupID(t *testing.T) {
+func TestUpdateUserSettingsStoresSettings(t *testing.T) {
 	database := newUsersTestDB(t)
 	userID := createSettingsTestUser(t, database, "settings-update@example.com")
 
-	updated, err := database.UpdateUserSettings(context.Background(), userID, UserSettings{LastActiveGroupID: 42})
+	updated, err := database.UpdateUserSettings(context.Background(), userID, UserSettings{
+		LastActiveGroupID: 42,
+		Theme:             "dark",
+		InlandTaxTemplate: "DE",
+	})
 	if err != nil {
 		t.Fatalf("UpdateUserSettings() error = %v", err)
 	}
@@ -74,8 +81,8 @@ func TestUpdateUserSettingsStoresLastActiveGroupID(t *testing.T) {
 	if !found {
 		t.Fatalf("GetUserByID() found = false, want true")
 	}
-	if user.Settings == nil || user.Settings.LastActiveGroupID != 42 {
-		t.Fatalf("Settings = %+v, want LastActiveGroupID 42", user.Settings)
+	if user.Settings == nil || user.Settings.LastActiveGroupID != 42 || user.Settings.Theme != "dark" || user.Settings.InlandTaxTemplate != "DE" {
+		t.Fatalf("Settings = %+v, want LastActiveGroupID 42, Theme dark and InlandTaxTemplate DE", user.Settings)
 	}
 }
 

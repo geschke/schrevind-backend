@@ -77,6 +77,10 @@ type addDividendEntryRequest struct {
 	WithholdingTaxAmountRefundable         string `json:"WithholdingTaxAmountRefundable"`
 	WithholdingTaxAmountRefundableCurrency string `json:"WithholdingTaxAmountRefundableCurrency"`
 
+	InlandTaxAmount   string               `json:"InlandTaxAmount"`
+	InlandTaxCurrency string               `json:"InlandTaxCurrency"`
+	InlandTaxDetails  []db.InlandTaxDetail `json:"InlandTaxDetails"`
+
 	ForeignFeesAmount   string `json:"ForeignFeesAmount"`
 	ForeignFeesCurrency string `json:"ForeignFeesCurrency"`
 
@@ -121,10 +125,21 @@ type updateDividendEntryRequest struct {
 	WithholdingTaxAmountRefundable         *string `json:"WithholdingTaxAmountRefundable"`
 	WithholdingTaxAmountRefundableCurrency *string `json:"WithholdingTaxAmountRefundableCurrency"`
 
+	InlandTaxAmount   *string               `json:"InlandTaxAmount"`
+	InlandTaxCurrency *string               `json:"InlandTaxCurrency"`
+	InlandTaxDetails  *[]db.InlandTaxDetail `json:"InlandTaxDetails"`
+
 	ForeignFeesAmount   *string `json:"ForeignFeesAmount"`
 	ForeignFeesCurrency *string `json:"ForeignFeesCurrency"`
 
 	Note *string `json:"Note"`
+}
+
+func (req updateDividendEntryRequest) requiresInlandTaxRecalculation() bool {
+	return req.GrossAmount != nil ||
+		req.PayoutAmount != nil ||
+		req.WithholdingTaxAmount != nil ||
+		req.InlandTaxDetails != nil
 }
 
 const (
@@ -431,6 +446,91 @@ func validateDividendEntryCurrencyPairs(database *db.DB, groupID int64, entry *d
 	return nil
 }
 
+// validateInlandTaxCurrency validates the backend-owned inland tax amount/currency pair.
+func validateInlandTaxCurrency(database *db.DB, groupID int64, entry *db.DividendEntry, errors fieldErrors) error {
+	entry.InlandTaxAmount = strings.TrimSpace(entry.InlandTaxAmount)
+	entry.InlandTaxCurrency = strings.TrimSpace(entry.InlandTaxCurrency)
+
+	if entry.InlandTaxAmount == "" && entry.InlandTaxCurrency == "" {
+		return nil
+	}
+	if entry.InlandTaxAmount != "" && entry.InlandTaxCurrency == "" {
+		errors["InlandTaxCurrency"] = errCurrencyRequired
+		return nil
+	}
+	if entry.InlandTaxCurrency == "" {
+		return nil
+	}
+	if !isStrictCurrencyCode(entry.InlandTaxCurrency) {
+		errors["InlandTaxCurrency"] = errCurrencyInvalidFormat
+		return nil
+	}
+
+	known, err := isKnownCurrency(database, groupID, entry.InlandTaxCurrency)
+	if err != nil {
+		return err
+	}
+	if !known {
+		errors["InlandTaxCurrency"] = errCurrencyUnknown
+	}
+
+	return nil
+}
+
+// validateInlandTaxDetails validates and normalizes optional inland tax snapshot rows.
+func validateInlandTaxDetails(database *db.DB, groupID int64, entry *db.DividendEntry, errors fieldErrors) error {
+	knownCurrencies := make(map[string]bool)
+
+	for i := range entry.InlandTaxDetails {
+		detail := &entry.InlandTaxDetails[i]
+		detail.Code = strings.TrimSpace(detail.Code)
+		detail.Label = strings.TrimSpace(detail.Label)
+		detail.Amount = strings.TrimSpace(detail.Amount)
+		detail.Currency = strings.TrimSpace(detail.Currency)
+
+		amountField := "InlandTaxDetails[" + strconv.Itoa(i) + "].Amount"
+		currencyField := "InlandTaxDetails[" + strconv.Itoa(i) + "].Currency"
+
+		if detail.Amount != "" {
+			normalized, err := validate.NormalizeDecimalString(detail.Amount, false)
+			if err != nil {
+				errors[amountField] = err.Error()
+			} else {
+				detail.Amount = normalized
+			}
+		}
+
+		if detail.Amount != "" && detail.Currency == "" {
+			errors[currencyField] = errCurrencyRequired
+			continue
+		}
+		if detail.Currency == "" {
+			continue
+		}
+		if !isStrictCurrencyCode(detail.Currency) {
+			errors[currencyField] = errCurrencyInvalidFormat
+			continue
+		}
+		if known, ok := knownCurrencies[detail.Currency]; ok {
+			if !known {
+				errors[currencyField] = errCurrencyUnknown
+			}
+			continue
+		}
+
+		item, err := database.GetCurrencyByCurrencyAndGroupID(detail.Currency, groupID)
+		if err != nil {
+			return err
+		}
+		knownCurrencies[detail.Currency] = item != nil
+		if item == nil {
+			errors[currencyField] = errCurrencyUnknown
+		}
+	}
+
+	return nil
+}
+
 // validateDividendEntryFXRate validates FXRateLabel/FXRate and normalizes the default rate.
 func validateDividendEntryFXRate(database *db.DB, groupID int64, entry *db.DividendEntry, errors fieldErrors) error {
 	entry.FXRateLabel = strings.TrimSpace(entry.FXRateLabel)
@@ -490,6 +590,58 @@ func validateDividendEntrySecurity(database *db.DB, groupID int64, entry *db.Div
 	return nil
 }
 
+func decimalValueOrZero(value string) (decimal.Decimal, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return decimal.Zero, nil
+	}
+	return decimal.NewFromString(value)
+}
+
+// prepareInlandTaxFields calculates inland tax amount when it was not explicitly submitted.
+func prepareInlandTaxFields(entry *db.DividendEntry, errors fieldErrors) {
+	entry.InlandTaxAmount = strings.TrimSpace(entry.InlandTaxAmount)
+	entry.InlandTaxCurrency = strings.TrimSpace(entry.InlandTaxCurrency)
+
+	if entry.InlandTaxAmount != "" {
+		return
+	}
+
+	if len(entry.InlandTaxDetails) > 0 {
+		sum := decimal.Zero
+		for i := range entry.InlandTaxDetails {
+			amount, err := decimalValueOrZero(entry.InlandTaxDetails[i].Amount)
+			if err != nil {
+				errors["InlandTaxDetails["+strconv.Itoa(i)+"].Amount"] = err.Error()
+				continue
+			}
+			sum = sum.Add(amount)
+		}
+		entry.InlandTaxAmount = sum.String()
+	} else {
+		gross, err := decimalValueOrZero(entry.GrossAmount)
+		if err != nil {
+			errors["GrossAmount"] = err.Error()
+			return
+		}
+		withholding, err := decimalValueOrZero(entry.WithholdingTaxAmount)
+		if err != nil {
+			errors["WithholdingTaxAmount"] = err.Error()
+			return
+		}
+		payout, err := decimalValueOrZero(entry.PayoutAmount)
+		if err != nil {
+			errors["PayoutAmount"] = err.Error()
+			return
+		}
+		entry.InlandTaxAmount = gross.Sub(withholding).Sub(payout).String()
+	}
+
+	if entry.InlandTaxCurrency == "" {
+		entry.InlandTaxCurrency = entry.PayoutCurrency
+	}
+}
+
 // parseFXRateLabel splits labels of the form AAA/BBB into their two currency codes.
 func parseFXRateLabel(label string) (string, string, bool) {
 	if len(label) != 7 || label[3] != '/' {
@@ -539,6 +691,14 @@ func normalizeDividendEntryPayload(entry db.DividendEntry) (db.DividendEntry, fi
 	entry.WithholdingTaxAmountCreditCurrency = strings.TrimSpace(entry.WithholdingTaxAmountCreditCurrency)
 	entry.WithholdingTaxAmountRefundable = strings.TrimSpace(entry.WithholdingTaxAmountRefundable)
 	entry.WithholdingTaxAmountRefundableCurrency = strings.TrimSpace(entry.WithholdingTaxAmountRefundableCurrency)
+	entry.InlandTaxAmount = strings.TrimSpace(entry.InlandTaxAmount)
+	entry.InlandTaxCurrency = strings.TrimSpace(entry.InlandTaxCurrency)
+	for i := range entry.InlandTaxDetails {
+		entry.InlandTaxDetails[i].Code = strings.TrimSpace(entry.InlandTaxDetails[i].Code)
+		entry.InlandTaxDetails[i].Label = strings.TrimSpace(entry.InlandTaxDetails[i].Label)
+		entry.InlandTaxDetails[i].Amount = strings.TrimSpace(entry.InlandTaxDetails[i].Amount)
+		entry.InlandTaxDetails[i].Currency = strings.TrimSpace(entry.InlandTaxDetails[i].Currency)
+	}
 	entry.ForeignFeesAmount = strings.TrimSpace(entry.ForeignFeesAmount)
 	entry.ForeignFeesCurrency = strings.TrimSpace(entry.ForeignFeesCurrency)
 	entry.Note = strings.TrimSpace(entry.Note)
@@ -569,6 +729,7 @@ func normalizeDividendEntryPayload(entry db.DividendEntry) (db.DividendEntry, fi
 		{FieldName: "WithholdingTaxAmount", Value: &entry.WithholdingTaxAmount},
 		{FieldName: "WithholdingTaxAmountCredit", Value: &entry.WithholdingTaxAmountCredit},
 		{FieldName: "WithholdingTaxAmountRefundable", Value: &entry.WithholdingTaxAmountRefundable},
+		{FieldName: "InlandTaxAmount", Value: &entry.InlandTaxAmount},
 		{FieldName: "ForeignFeesAmount", Value: &entry.ForeignFeesAmount},
 	})
 
@@ -688,6 +849,10 @@ func formatDividendEntryForLocale(entry db.DividendEntry, locale string) db.Divi
 	entry.WithholdingTaxAmount = displayformat.DecimalForLocale(entry.WithholdingTaxAmount, locale)
 	entry.WithholdingTaxAmountCredit = displayformat.DecimalForLocale(entry.WithholdingTaxAmountCredit, locale)
 	entry.WithholdingTaxAmountRefundable = displayformat.DecimalForLocale(entry.WithholdingTaxAmountRefundable, locale)
+	entry.InlandTaxAmount = displayformat.DecimalForLocale(entry.InlandTaxAmount, locale)
+	for i := range entry.InlandTaxDetails {
+		entry.InlandTaxDetails[i].Amount = displayformat.DecimalForLocale(entry.InlandTaxDetails[i].Amount, locale)
+	}
 	entry.ForeignFeesAmount = displayformat.DecimalForLocale(entry.ForeignFeesAmount, locale)
 	entry.CalcGrossAmountBase = displayformat.DecimalForLocale(entry.CalcGrossAmountBase, locale)
 	entry.CalcAfterWithholdingAmountBase = displayformat.DecimalForLocale(entry.CalcAfterWithholdingAmountBase, locale)
@@ -1041,6 +1206,9 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		WithholdingTaxAmountCreditCurrency:     req.WithholdingTaxAmountCreditCurrency,
 		WithholdingTaxAmountRefundable:         req.WithholdingTaxAmountRefundable,
 		WithholdingTaxAmountRefundableCurrency: req.WithholdingTaxAmountRefundableCurrency,
+		InlandTaxAmount:                        req.InlandTaxAmount,
+		InlandTaxCurrency:                      req.InlandTaxCurrency,
+		InlandTaxDetails:                       req.InlandTaxDetails,
 		ForeignFeesAmount:                      req.ForeignFeesAmount,
 		ForeignFeesCurrency:                    req.ForeignFeesCurrency,
 		Note:                                   req.Note,
@@ -1064,6 +1232,15 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		return
 	}
 	if err := validateDividendEntryCurrencyPairs(ct.DB, req.ContextGroupID, &entry, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if err := validateInlandTaxDetails(ct.DB, req.ContextGroupID, &entry, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	prepareInlandTaxFields(&entry, fieldErrors)
+	if err := validateInlandTaxCurrency(ct.DB, req.ContextGroupID, &entry, fieldErrors); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
@@ -1239,6 +1416,19 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 	if req.WithholdingTaxAmountRefundableCurrency != nil {
 		updated.WithholdingTaxAmountRefundableCurrency = *req.WithholdingTaxAmountRefundableCurrency
 	}
+	if req.InlandTaxAmount != nil {
+		updated.InlandTaxAmount = *req.InlandTaxAmount
+	} else if req.requiresInlandTaxRecalculation() {
+		updated.InlandTaxAmount = ""
+	}
+	if req.InlandTaxCurrency != nil {
+		updated.InlandTaxCurrency = *req.InlandTaxCurrency
+	} else if req.InlandTaxAmount == nil && req.requiresInlandTaxRecalculation() {
+		updated.InlandTaxCurrency = ""
+	}
+	if req.InlandTaxDetails != nil {
+		updated.InlandTaxDetails = *req.InlandTaxDetails
+	}
 	if req.ForeignFeesAmount != nil {
 		updated.ForeignFeesAmount = *req.ForeignFeesAmount
 	}
@@ -1269,6 +1459,15 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 		return
 	}
 	if err := validateDividendEntryCurrencyPairs(ct.DB, groupID, &updated, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if err := validateInlandTaxDetails(ct.DB, groupID, &updated, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	prepareInlandTaxFields(&updated, fieldErrors)
+	if err := validateInlandTaxCurrency(ct.DB, groupID, &updated, fieldErrors); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}

@@ -67,6 +67,66 @@ func TestNormalizeDividendEntryPayloadCollectsFieldErrors(t *testing.T) {
 	assertFieldError(t, errors, "GrossAmount", validate.ErrDecimalInvalidGrouping)
 }
 
+func TestPrepareInlandTaxFieldsKeepsExplicitAmount(t *testing.T) {
+	entry := validDividendEntryPayloadForValidation()
+	entry.InlandTaxAmount = "5.00"
+	entry.InlandTaxCurrency = "EUR"
+	entry.InlandTaxDetails = []db.InlandTaxDetail{
+		{Amount: "1.00", Currency: "EUR"},
+		{Amount: "2.00", Currency: "EUR"},
+	}
+	errors := fieldErrors{}
+
+	prepareInlandTaxFields(&entry, errors)
+
+	if len(errors) > 0 {
+		t.Fatalf("prepareInlandTaxFields() field errors = %v", errors)
+	}
+	assertString(t, "InlandTaxAmount", entry.InlandTaxAmount, "5.00")
+	assertString(t, "InlandTaxCurrency", entry.InlandTaxCurrency, "EUR")
+}
+
+func TestPrepareInlandTaxFieldsSumsDetailsWhenAmountEmpty(t *testing.T) {
+	entry := validDividendEntryPayloadForValidation()
+	entry.InlandTaxAmount = ""
+	entry.InlandTaxCurrency = ""
+	entry.PayoutCurrency = "EUR"
+	entry.InlandTaxDetails = []db.InlandTaxDetail{
+		{Amount: "1.20", Currency: "EUR"},
+		{Amount: "", Currency: "EUR"},
+		{Amount: "0.30", Currency: "EUR"},
+	}
+	errors := fieldErrors{}
+
+	prepareInlandTaxFields(&entry, errors)
+
+	if len(errors) > 0 {
+		t.Fatalf("prepareInlandTaxFields() field errors = %v", errors)
+	}
+	assertString(t, "InlandTaxAmount", entry.InlandTaxAmount, "1.5")
+	assertString(t, "InlandTaxCurrency", entry.InlandTaxCurrency, "EUR")
+}
+
+func TestPrepareInlandTaxFieldsFallsBackToDifference(t *testing.T) {
+	entry := validDividendEntryPayloadForValidation()
+	entry.GrossAmount = "100.00"
+	entry.WithholdingTaxAmount = "15.00"
+	entry.PayoutAmount = "60.00"
+	entry.PayoutCurrency = "EUR"
+	entry.InlandTaxAmount = ""
+	entry.InlandTaxCurrency = ""
+	entry.InlandTaxDetails = nil
+	errors := fieldErrors{}
+
+	prepareInlandTaxFields(&entry, errors)
+
+	if len(errors) > 0 {
+		t.Fatalf("prepareInlandTaxFields() field errors = %v", errors)
+	}
+	assertString(t, "InlandTaxAmount", entry.InlandTaxAmount, "25")
+	assertString(t, "InlandTaxCurrency", entry.InlandTaxCurrency, "EUR")
+}
+
 func TestValidateDividendEntryCurrencyPairsAcceptsKnownCurrencies(t *testing.T) {
 	database := newCurrencyValidationTestDB(t)
 	entry := validDividendEntryPayloadForValidation()

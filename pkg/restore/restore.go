@@ -189,6 +189,10 @@ VALUES (?, ?, ?, ?, ?, ?);
 
 	// 9. Insert dividend_entries (references depots and securities).
 	for _, e := range doc.Data.DividendEntries {
+		inlandTaxDetails, err := db.EncodeInlandTaxDetails(e.InlandTaxDetails)
+		if err != nil {
+			return fmt.Errorf("IMPORT_FAILED: encode inland_tax_details dividend_entry id=%d: %w", e.ID, err)
+		}
 		if _, err := tx.Exec(`
 INSERT INTO dividend_entries (
   id, depot_id, security_id, pay_date, ex_date,
@@ -201,10 +205,11 @@ INSERT INTO dividend_entries (
   withholding_tax_amount, withholding_tax_currency,
   withholding_tax_amount_credit, withholding_tax_amount_credit_currency,
   withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency,
+  inland_tax_amount, inland_tax_currency, inland_tax_details,
   foreign_fees_amount, foreign_fees_currency,
   note, calc_gross_amount_base, calc_after_withholding_amount_base,
   created_at, updated_at
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
 `, e.ID, e.DepotID, e.SecurityID, e.PayDate, e.ExDate,
 			e.SecurityName, e.SecurityISIN, e.SecurityWKN, e.SecuritySymbol,
 			e.Quantity, e.DividendPerUnitAmount, e.DividendPerUnitCurrency,
@@ -215,6 +220,7 @@ INSERT INTO dividend_entries (
 			e.WithholdingTaxAmount, e.WithholdingTaxCurrency,
 			e.WithholdingTaxAmountCredit, e.WithholdingTaxAmountCreditCurrency,
 			e.WithholdingTaxAmountRefundable, e.WithholdingTaxAmountRefundableCurrency,
+			e.InlandTaxAmount, e.InlandTaxCurrency, inlandTaxDetails,
 			e.ForeignFeesAmount, e.ForeignFeesCurrency,
 			e.Note, e.CalcGrossAmountBase, e.CalcAfterWithholdingAmountBase,
 			e.CreatedAt, e.UpdatedAt); err != nil {
