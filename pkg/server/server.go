@@ -3,10 +3,13 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
@@ -14,6 +17,7 @@ import (
 	"github.com/geschke/schrevind/pkg/controller"
 	"github.com/geschke/schrevind/pkg/db"
 	"github.com/geschke/schrevind/pkg/grrt"
+	"github.com/geschke/schrevind/web"
 
 	"github.com/gin-gonic/gin"
 	"github.com/gorilla/sessions"
@@ -189,7 +193,8 @@ func Start(database *db.DB) error {
 	}
 
 	// public routes
-	router.GET("/", getMain)
+	//router.GET("/", getMain)
+	setupFrontend(router)
 
 	// Basic health check
 	router.GET("/health", func(c *gin.Context) {
@@ -228,11 +233,43 @@ func Start(database *db.DB) error {
 	return serveErr
 }
 
-// getMain returns data for the requested input.
-func getMain(c *gin.Context) {
-	c.Header("Access-Control-Allow-Methods", "PUT, POST, GET, DELETE, OPTIONS")
-	c.JSON(200, gin.H{
-		"message": "nothing here",
+func setupFrontend(router *gin.Engine) {
+	distFS, err := fs.Sub(web.FS, "dist")
+	if err != nil {
+		log.Fatalf("frontend embed fehler: %v", err)
+	}
+
+	fileServer := http.FileServer(http.FS(distFS))
+
+	// assets: set long time cache
+	router.GET("/assets/*filepath", func(c *gin.Context) {
+		c.Header("Cache-Control", "public, max-age=31536000, immutable")
+		fileServer.ServeHTTP(c.Writer, c.Request)
 	})
 
+	// SPA fallback
+	router.NoRoute(func(c *gin.Context) {
+		path := c.Request.URL.Path
+
+		// /api/* should never be reached
+		if strings.HasPrefix(path, "/api/") {
+			c.JSON(http.StatusNotFound, gin.H{"error": "not found"})
+			return
+		}
+
+		// does the file exist? (/favicon.ico, /robots.txt ...)
+		f, err := distFS.Open(strings.TrimPrefix(path, "/"))
+		if err == nil {
+			f.Close()
+			fileServer.ServeHTTP(c.Writer, c.Request)
+			return
+		}
+
+		// everything else - index.html for vue app
+		c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+		index, _ := distFS.Open("index.html")
+		defer index.Close()
+		stat, _ := index.Stat()
+		http.ServeContent(c.Writer, c.Request, "index.html", stat.ModTime(), index.(io.ReadSeeker))
+	})
 }
