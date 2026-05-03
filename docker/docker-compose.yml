@@ -14,12 +14,11 @@ services:
       # SQLite database directory
       - ./data:/app/data
 
-      # Hugo website checkout / working directory
-      - ./website:/app/website
-
     environment:
       # optional, but usually useful
       TZ: Europe/Berlin
 
     # serve is already default via Dockerfile
     # command: ["serve"]
+
+
