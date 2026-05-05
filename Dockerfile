@@ -1,6 +1,9 @@
 # Stage 1: Vue build
 FROM node:22-alpine AS frontend
+ARG FRONTEND_HASH=dev
 RUN apk add --no-cache git
+# Cache-bust: forces rebuild when FRONTEND_HASH changes
+RUN echo "Frontend hash: $FRONTEND_HASH"
 RUN git clone https://github.com/geschke/schrevind-ui.git /ui
 WORKDIR /ui
 RUN npm ci && npm run build
