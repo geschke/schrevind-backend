@@ -22,6 +22,19 @@ jobs:
       - name: Checkout backend
         uses: actions/checkout@v6
 
+      - name: Checkout UI
+        uses: actions/checkout@v4
+        with:
+          repository: geschke/schrevind-ui
+          path: schrevind-ui
+
+      - name: Get git info
+        id: gitinfo
+        run: |
+          echo "backend_hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          cd schrevind-ui
+          echo "frontend_hash=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+
       - name: Set up QEMU
         uses: docker/setup-qemu-action@v4
 
@@ -58,6 +71,9 @@ jobs:
           cache-to: type=gha,mode=max
           provenance: false
           sbom: false
+          build-args: |
+            BACKEND_HASH=${{ steps.gitinfo.outputs.backend_hash }}
+            FRONTEND_HASH=${{ steps.gitinfo.outputs.frontend_hash }}
 
       - name: Test container on amd64
         run: |
@@ -70,3 +86,4 @@ jobs:
           docker run --rm \
             --platform linux/arm64 \
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest /schrevind --help
+

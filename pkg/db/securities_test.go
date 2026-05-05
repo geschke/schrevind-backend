@@ -82,31 +82,6 @@ func TestCreateSecurityRejectsDuplicateISINWithinGroup(t *testing.T) {
 	}
 }
 
-func TestCreateSecurityRejectsDuplicateNameWithinGroup(t *testing.T) {
-	database := newSecuritiesTestDB(t)
-	group := createSecurityTestGroup(t, database, "Duplicate Name Group")
-
-	first := Security{
-		GroupID: group.ID,
-		Name:    "Same Name Security",
-		ISIN:    "US0000000003",
-		Status:  SecurityStatusActive,
-	}
-	if err := database.CreateSecurity(&first); err != nil {
-		t.Fatalf("CreateSecurity(first) error = %v", err)
-	}
-
-	second := Security{
-		GroupID: group.ID,
-		Name:    "Same Name Security",
-		ISIN:    "US0000000004",
-		Status:  SecurityStatusActive,
-	}
-	if err := database.CreateSecurity(&second); err == nil {
-		t.Fatalf("CreateSecurity(duplicate name) error = nil, want error")
-	}
-}
-
 func TestListSecuritiesByGroupIDScopesResults(t *testing.T) {
 	database := newSecuritiesTestDB(t)
 	groupA := createSecurityTestGroup(t, database, "Scoped Securities Group A")

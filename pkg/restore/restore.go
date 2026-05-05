@@ -2,7 +2,9 @@ package restore
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/geschke/schrevind/pkg/db"
 	"github.com/geschke/schrevind/pkg/export"
@@ -14,13 +16,83 @@ type formatProbe struct {
 	Version int    `json:"version"`
 }
 
+func invalidBackupFormat(data []byte, err error) error {
+	if err == nil {
+		return fmt.Errorf("INVALID_BACKUP_FORMAT")
+	}
+
+	return fmt.Errorf("INVALID_BACKUP_FORMAT: %s", jsonErrorDetail(data, err))
+}
+
+func jsonErrorDetail(data []byte, err error) string {
+	var syntaxErr *json.SyntaxError
+	if errors.As(err, &syntaxErr) {
+		return formatJSONOffsetDetail(data, syntaxErr.Offset, syntaxErr.Error())
+	}
+
+	var typeErr *json.UnmarshalTypeError
+	if errors.As(err, &typeErr) {
+		message := typeErr.Error()
+		if typeErr.Field != "" {
+			message = fmt.Sprintf("%s (field %s)", message, typeErr.Field)
+		}
+		return formatJSONOffsetDetail(data, typeErr.Offset, message)
+	}
+
+	return err.Error()
+}
+
+func formatJSONOffsetDetail(data []byte, offset int64, message string) string {
+	line, column, text := jsonLineAtOffset(data, offset)
+	if line <= 0 {
+		return message
+	}
+	if text == "" {
+		return fmt.Sprintf("%s at line %d, column %d", message, line, column)
+	}
+	return fmt.Sprintf("%s at line %d, column %d: %s", message, line, column, text)
+}
+
+func jsonLineAtOffset(data []byte, offset int64) (int, int, string) {
+	if offset <= 0 {
+		return 0, 0, ""
+	}
+	index := int(offset) - 1
+	if index >= len(data) {
+		index = len(data) - 1
+	}
+	if index < 0 {
+		return 0, 0, ""
+	}
+
+	line := 1
+	lineStart := 0
+	for i := 0; i < index; i++ {
+		if data[i] == '\n' {
+			line++
+			lineStart = i + 1
+		}
+	}
+
+	lineEnd := len(data)
+	for i := lineStart; i < len(data); i++ {
+		if data[i] == '\n' {
+			lineEnd = i
+			break
+		}
+	}
+
+	text := strings.TrimRight(string(data[lineStart:lineEnd]), "\r")
+	return line, index - lineStart + 1, text
+}
+
 // Load detects the format of the backup data and returns a parsed ExportDoc.
 // If the backup is encrypted, passwordFn is called once to obtain the password.
 // Returns an error with message "INVALID_BACKUP_FORMAT" for unrecognised data.
 func Load(data []byte, passwordFn func() (string, error)) (*export.ExportDoc, error) {
 	var probe formatProbe
 	if err := json.Unmarshal(data, &probe); err != nil {
-		return nil, fmt.Errorf("INVALID_BACKUP_FORMAT")
+		return nil, invalidBackupFormat(data, err)
 	}
 
 	switch probe.Format {
@@ -38,30 +110,30 @@ func Load(data []byte, passwordFn func() (string, error)) (*export.ExportDoc, er
 
 		// Re-probe the decrypted content.
 		if err := json.Unmarshal(plaintext, &probe); err != nil {
-			return nil, fmt.Errorf("INVALID_BACKUP_FORMAT")
+			return nil, invalidBackupFormat(plaintext, err)
 		}
 		if probe.Format != "schrevind-export" || probe.Version != 1 {
-			return nil, fmt.Errorf("INVALID_BACKUP_FORMAT")
+			return nil, fmt.Errorf("INVALID_BACKUP_FORMAT: decrypted backup has format %q and version %d, want format %q and version 1", probe.Format, probe.Version, "schrevind-export")
 		}
 
 		var doc export.ExportDoc
 		if err := json.Unmarshal(plaintext, &doc); err != nil {
-			return nil, fmt.Errorf("INVALID_BACKUP_FORMAT")
+			return nil, invalidBackupFormat(plaintext, err)
 		}
 		return &doc, nil
 
 	case "schrevind-export":
 		if probe.Version != 1 {
-			return nil, fmt.Errorf("INVALID_BACKUP_FORMAT")
+			return nil, fmt.Errorf("INVALID_BACKUP_FORMAT: unsupported version %d, want 1", probe.Version)
 		}
 		var doc export.ExportDoc
 		if err := json.Unmarshal(data, &doc); err != nil {
-			return nil, fmt.Errorf("INVALID_BACKUP_FORMAT")
+			return nil, invalidBackupFormat(data, err)
 		}
 		return &doc, nil
 
 	default:
-		return nil, fmt.Errorf("INVALID_BACKUP_FORMAT")
+		return nil, fmt.Errorf("INVALID_BACKUP_FORMAT: unsupported format %q", probe.Format)
 	}
 }
 

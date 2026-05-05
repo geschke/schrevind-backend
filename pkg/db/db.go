@@ -149,7 +149,6 @@ CREATE TABLE IF NOT EXISTS securities (
 );
 `,
 		`CREATE UNIQUE INDEX IF NOT EXISTS idx_securities_group_isin ON securities(group_id, isin);`,
-		`CREATE UNIQUE INDEX IF NOT EXISTS idx_securities_group_name ON securities(group_id, name);`,
 		`CREATE INDEX IF NOT EXISTS idx_securities_group_wkn ON securities(group_id, wkn);`,
 		`CREATE INDEX IF NOT EXISTS idx_securities_group_symbol ON securities(group_id, symbol);`,
 		`CREATE INDEX IF NOT EXISTS idx_securities_group_status ON securities(group_id, status);`,

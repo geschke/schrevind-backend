@@ -15,6 +15,7 @@ import (
 
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/controller"
+	"github.com/geschke/schrevind/pkg/cors"
 	"github.com/geschke/schrevind/pkg/db"
 	"github.com/geschke/schrevind/pkg/grrt"
 	"github.com/geschke/schrevind/web"
@@ -190,6 +191,7 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/groups/:id/members/remove", groupsCtl.Options)
 		router.GET("/api/groups/:id/depots", groupsCtl.GetDepots)
 		router.OPTIONS("/api/groups/:id/depots", groupsCtl.Options)
+
 	}
 
 	// public routes
@@ -240,6 +242,24 @@ func setupFrontend(router *gin.Engine) {
 	}
 
 	fileServer := http.FileServer(http.FS(distFS))
+
+	router.GET("/api/version", func(c *gin.Context) {
+		if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+			return
+		}
+		data, err := fs.ReadFile(distFS, "version.json")
+		if err != nil {
+			c.JSON(http.StatusOK, gin.H{
+				"backend":  "dev",
+				"frontend": "dev",
+			})
+			return
+		}
+		c.Data(http.StatusOK, "application/json; charset=utf-8", data)
+	})
+	router.OPTIONS("/api/version", func(c *gin.Context) {
+		_ = cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins)
+	})
 
 	// assets: set long time cache
 	router.GET("/assets/*filepath", func(c *gin.Context) {
