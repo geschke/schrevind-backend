@@ -10,9 +10,12 @@ import (
 )
 
 type UserSettings struct {
-	LastActiveGroupID int    `json:"LastActiveGroupID"`
-	Theme             string `json:"Theme"`
-	InlandTaxTemplate string `json:"InlandTaxTemplate"`
+	LastActiveGroupID int      `json:"LastActiveGroupID"`
+	Theme             string   `json:"Theme"`
+	InlandTaxTemplate string   `json:"InlandTaxTemplate"`
+	TOTPEnabled       bool     `json:"TOTPEnabled"`
+	TOTPSecret        string   `json:"TOTPSecret,omitempty"`
+	TOTPBackupCodes   []string `json:"TOTPBackupCodes,omitempty"`
 }
 
 type UserSettingsUpdate struct {

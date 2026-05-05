@@ -118,6 +118,21 @@ func userSettingsValue(u db.User) db.UserSettings {
 	return *u.Settings
 }
 
+func sanitizeUserSettingsForResponse(settings db.UserSettings) db.UserSettings {
+	settings.TOTPSecret = ""
+	settings.TOTPBackupCodes = nil
+	return settings
+}
+
+func sanitizeUserForResponse(u db.User) db.User {
+	u.Password = ""
+	if u.Settings != nil {
+		settings := sanitizeUserSettingsForResponse(*u.Settings)
+		u.Settings = &settings
+	}
+	return u
+}
+
 func validateUserTheme(theme string) (string, bool) {
 	theme = strings.TrimSpace(theme)
 	if utf8.RuneCountInString(theme) > 50 {
@@ -258,7 +273,7 @@ func (ct UsersController) GetByID(c *gin.Context) {
 		return
 	}
 
-	item.Password = ""
+	item = sanitizeUserForResponse(item)
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -743,6 +758,6 @@ func (ct UsersController) PostSettings(c *gin.Context) {
 
 	c.JSON(http.StatusOK, gin.H{
 		"success":  true,
-		"settings": settings,
+		"settings": sanitizeUserSettingsForResponse(settings),
 	})
 }

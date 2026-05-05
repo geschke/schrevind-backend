@@ -7,6 +7,7 @@ It uses Viper for reading configuration files and setting global variables.
 package config
 
 import (
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"log"
@@ -44,6 +45,9 @@ type WebUIConfig struct {
 	CookieSameSite     string   `mapstructure:"cookie_samesite"` // lax|strict|none
 	CookieMaxAgeDays   int      `mapstructure:"cookie_max_age_days"`
 	CORSAllowedOrigins []string `mapstructure:"cors_allowed_origins"`
+
+	// TOTPEncryptionKey is a hex-encoded 32-byte key for encrypting TOTP secrets.
+	TOTPEncryptionKey string `mapstructure:"totp_encryption_key"`
 }
 
 // SQLiteConfig holds settings for the SQLite database file.
@@ -99,6 +103,18 @@ var (
 	//Port int
 	Cfg AppConfig
 )
+
+// TOTPEncryptionKeyBytes decodes the configured hex key used for TOTP secret encryption.
+func TOTPEncryptionKeyBytes() ([]byte, error) {
+	key, err := hex.DecodeString(strings.TrimSpace(Cfg.WebUI.TOTPEncryptionKey))
+	if err != nil {
+		return nil, err
+	}
+	if len(key) != 32 {
+		return nil, fmt.Errorf("totp encryption key must decode to 32 bytes")
+	}
+	return key, nil
+}
 
 // Global configuration constants
 
@@ -202,6 +218,9 @@ func readAndSetConfig() error {
 		}
 		if len(Cfg.WebUI.CORSAllowedOrigins) == 0 {
 			return exitOnErr(errors.New("web_ui.cors_allowed_origins must be set when web_ui.enabled=true"))
+		}
+		if _, err := TOTPEncryptionKeyBytes(); err != nil {
+			return exitOnErr(errors.New("web_ui.totp_encryption_key must be a hex-encoded 32-byte key when web_ui.enabled=true"))
 		}
 		if Cfg.WebUI.CookieMaxAgeDays == 0 {
 			Cfg.WebUI.CookieMaxAgeDays = 30

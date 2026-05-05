@@ -20,3 +20,19 @@ Schrevind is designed as a **self-hosted web application**. The backend is writt
 The project is intentionally kept small, transparent, and easy to run locally or on a small server (for example a home server or a Raspberry Pi).
 
 More documentation will be added as the project evolves.
+
+## Configuration Notes
+
+When the web UI is enabled, Schrevind requires a TOTP encryption key for
+two-factor authentication secrets:
+
+```yaml
+web_ui:
+  totp_encryption_key: "<hex-encoded 32-byte key>"
+```
+
+Generate a key with:
+
+```bash
+openssl rand -hex 32
+```
