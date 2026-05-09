@@ -28,8 +28,8 @@ var InlandTaxTemplates = map[string]InlandTaxTemplate{
 		Currency: "EUR",
 		Fields: []InlandTaxTemplateField{
 			{Code: "capital_gains_tax", Label: "Kapitalertragsteuer", Currency: "EUR", SortOrder: 10},
-			{Code: "solidarity_surcharge", Label: "Solidaritätszuschlag", Currency: "EUR", SortOrder: 20},
-			{Code: "church_tax", Label: "Kirchensteuer", Currency: "EUR", SortOrder: 30},
+			{Code: "church_tax", Label: "Kirchensteuer", Currency: "EUR", SortOrder: 20},
+			{Code: "solidarity_surcharge", Label: "Solidaritätszuschlag", Currency: "EUR", SortOrder: 30},
 		},
 	},
 }
