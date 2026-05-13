@@ -839,7 +839,77 @@ func formatCalculatedDecimal(value decimal.Decimal, decimalPlaces int32) string 
 	return value.Round(decimalPlaces).StringFixed(decimalPlaces)
 }
 
-func formatDividendEntryForLocale(entry db.DividendEntry, locale string) db.DividendEntry {
+type dividendEntryCurrencyFormatter struct {
+	database          *db.DB
+	securityGroups    map[int64]int64
+	currencyPrecision map[string]int32
+}
+
+func newDividendEntryCurrencyFormatter(database *db.DB) *dividendEntryCurrencyFormatter {
+	return &dividendEntryCurrencyFormatter{
+		database:          database,
+		securityGroups:    make(map[int64]int64),
+		currencyPrecision: make(map[string]int32),
+	}
+}
+
+func (f *dividendEntryCurrencyFormatter) groupIDForEntry(entry db.DividendEntry) (int64, error) {
+	if entry.SecurityID <= 0 {
+		return 0, nil
+	}
+	if groupID, ok := f.securityGroups[entry.SecurityID]; ok {
+		return groupID, nil
+	}
+
+	groupID, found, err := f.database.GetSecurityGroupIDByID(entry.SecurityID)
+	if err != nil {
+		return 0, err
+	}
+	if !found {
+		f.securityGroups[entry.SecurityID] = 0
+		return 0, nil
+	}
+
+	f.securityGroups[entry.SecurityID] = groupID
+	return groupID, nil
+}
+
+func (f *dividendEntryCurrencyFormatter) decimalPlaces(groupID int64, currency string) (int32, bool, error) {
+	currency = strings.TrimSpace(currency)
+	if groupID <= 0 || currency == "" {
+		return 0, false, nil
+	}
+
+	cacheKey := strconv.FormatInt(groupID, 10) + ":" + currency
+	if decimalPlaces, ok := f.currencyPrecision[cacheKey]; ok {
+		return decimalPlaces, true, nil
+	}
+
+	item, err := f.database.GetCurrencyByCurrencyAndGroupID(currency, groupID)
+	if err != nil {
+		return 0, false, err
+	}
+	if item == nil {
+		return 0, false, nil
+	}
+
+	decimalPlaces := int32(item.DecimalPlaces)
+	f.currencyPrecision[cacheKey] = decimalPlaces
+	return decimalPlaces, true, nil
+}
+
+func (f *dividendEntryCurrencyFormatter) formatAmount(value, currency, locale string, groupID int64) (string, error) {
+	decimalPlaces, ok, err := f.decimalPlaces(groupID, currency)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return displayformat.DecimalForLocale(value, locale), nil
+	}
+	return displayformat.DecimalForLocaleFixed(value, locale, decimalPlaces), nil
+}
+
+func formatDividendEntryForLocale(entry db.DividendEntry, locale string, formatter *dividendEntryCurrencyFormatter) (db.DividendEntry, error) {
 	entry.Quantity = displayformat.DecimalForLocale(entry.Quantity, locale)
 	entry.DividendPerUnitAmount = displayformat.DecimalForLocale(entry.DividendPerUnitAmount, locale)
 	entry.FXRate = displayformat.DecimalForLocale(entry.FXRate, locale)
@@ -849,21 +919,49 @@ func formatDividendEntryForLocale(entry db.DividendEntry, locale string) db.Divi
 	entry.WithholdingTaxAmount = displayformat.DecimalForLocale(entry.WithholdingTaxAmount, locale)
 	entry.WithholdingTaxAmountCredit = displayformat.DecimalForLocale(entry.WithholdingTaxAmountCredit, locale)
 	entry.WithholdingTaxAmountRefundable = displayformat.DecimalForLocale(entry.WithholdingTaxAmountRefundable, locale)
-	entry.InlandTaxAmount = displayformat.DecimalForLocale(entry.InlandTaxAmount, locale)
-	for i := range entry.InlandTaxDetails {
-		entry.InlandTaxDetails[i].Amount = displayformat.DecimalForLocale(entry.InlandTaxDetails[i].Amount, locale)
+
+	groupID := int64(0)
+	if formatter != nil {
+		var err error
+		groupID, err = formatter.groupIDForEntry(entry)
+		if err != nil {
+			return db.DividendEntry{}, err
+		}
+	}
+	if formatter != nil {
+		formatted, err := formatter.formatAmount(entry.InlandTaxAmount, entry.InlandTaxCurrency, locale, groupID)
+		if err != nil {
+			return db.DividendEntry{}, err
+		}
+		entry.InlandTaxAmount = formatted
+		for i := range entry.InlandTaxDetails {
+			formatted, err := formatter.formatAmount(entry.InlandTaxDetails[i].Amount, entry.InlandTaxDetails[i].Currency, locale, groupID)
+			if err != nil {
+				return db.DividendEntry{}, err
+			}
+			entry.InlandTaxDetails[i].Amount = formatted
+		}
+	} else {
+		entry.InlandTaxAmount = displayformat.DecimalForLocale(entry.InlandTaxAmount, locale)
+		for i := range entry.InlandTaxDetails {
+			entry.InlandTaxDetails[i].Amount = displayformat.DecimalForLocale(entry.InlandTaxDetails[i].Amount, locale)
+		}
 	}
 	entry.ForeignFeesAmount = displayformat.DecimalForLocale(entry.ForeignFeesAmount, locale)
 	entry.CalcGrossAmountBase = displayformat.DecimalForLocale(entry.CalcGrossAmountBase, locale)
 	entry.CalcAfterWithholdingAmountBase = displayformat.DecimalForLocale(entry.CalcAfterWithholdingAmountBase, locale)
-	return entry
+	return entry, nil
 }
 
-func formatDividendEntriesForLocale(items []db.DividendEntry, locale string) []db.DividendEntry {
+func formatDividendEntriesForLocale(items []db.DividendEntry, locale string, formatter *dividendEntryCurrencyFormatter) ([]db.DividendEntry, error) {
 	for i := range items {
-		items[i] = formatDividendEntryForLocale(items[i], locale)
+		formatted, err := formatDividendEntryForLocale(items[i], locale, formatter)
+		if err != nil {
+			return nil, err
+		}
+		items[i] = formatted
 	}
-	return items
+	return items, nil
 }
 
 // GetByID handles GET /api/dividend-entries/:id and returns one authorized entry.
@@ -915,7 +1013,12 @@ func (ct DividendEntriesController) GetByID(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
-	item = formatDividendEntryForLocale(item, locale)
+	formatter := newDividendEntryCurrencyFormatter(ct.DB)
+	item, err = formatDividendEntryForLocale(item, locale, formatter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -990,7 +1093,12 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
-	items = formatDividendEntriesForLocale(items, locale)
+	formatter := newDividendEntryCurrencyFormatter(ct.DB)
+	items, err = formatDividendEntriesForLocale(items, locale, formatter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1055,7 +1163,12 @@ func (ct DividendEntriesController) GetListByDepot(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
-	items = formatDividendEntriesForLocale(items, locale)
+	formatter := newDividendEntryCurrencyFormatter(ct.DB)
+	items, err = formatDividendEntriesForLocale(items, locale, formatter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,
@@ -1150,7 +1263,12 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
 		return
 	}
-	items = formatDividendEntriesForLocale(items, locale)
+	formatter := newDividendEntryCurrencyFormatter(ct.DB)
+	items, err = formatDividendEntriesForLocale(items, locale, formatter)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"success": true,

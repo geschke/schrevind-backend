@@ -208,6 +208,27 @@ SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
 	return security, nil
 }
 
+// GetSecurityGroupIDByID returns the group ID of a security, or false when not found.
+func (d *DB) GetSecurityGroupIDByID(id int64) (int64, bool, error) {
+	if d == nil || d.SQL == nil {
+		return 0, false, fmt.Errorf("db not initialized")
+	}
+	if id <= 0 {
+		return 0, false, fmt.Errorf("id must be > 0")
+	}
+
+	var groupID int64
+	err := d.SQL.QueryRow(`SELECT group_id FROM securities WHERE id = ? LIMIT 1;`, id).Scan(&groupID)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("get security group id by id: %w", err)
+	}
+
+	return groupID, true, nil
+}
+
 // GetSecurityByISINAndGroupID returns the security for the requested ISIN and group ID, or nil when not found.
 func (d *DB) GetSecurityByISINAndGroupID(isin string, groupID int64) (*Security, error) {
 	if d == nil || d.SQL == nil {

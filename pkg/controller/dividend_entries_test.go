@@ -127,6 +127,41 @@ func TestPrepareInlandTaxFieldsFallsBackToDifference(t *testing.T) {
 	assertString(t, "InlandTaxCurrency", entry.InlandTaxCurrency, "EUR")
 }
 
+func TestFormatDividendEntryForLocalePadsInlandTaxCurrencyPrecision(t *testing.T) {
+	database := newCurrencyValidationTestDB(t)
+	security := db.Security{
+		GroupID: testCurrencyGroupID,
+		Name:    "Format Test Security",
+		ISIN:    "DE000FORMAT1",
+		Status:  db.SecurityStatusActive,
+	}
+	if err := database.CreateSecurity(&security); err != nil {
+		t.Fatalf("CreateSecurity() error = %v", err)
+	}
+
+	entry := db.DividendEntry{
+		SecurityID:          security.ID,
+		Quantity:            "1.5",
+		InlandTaxAmount:     "478.7",
+		InlandTaxCurrency:   "EUR",
+		ForeignFeesAmount:   "1.2",
+		ForeignFeesCurrency: "EUR",
+		InlandTaxDetails: []db.InlandTaxDetail{
+			{Amount: "12.3", Currency: "EUR"},
+		},
+	}
+
+	formatted, err := formatDividendEntryForLocale(entry, "de-DE", newDividendEntryCurrencyFormatter(database))
+	if err != nil {
+		t.Fatalf("formatDividendEntryForLocale() error = %v", err)
+	}
+
+	assertString(t, "InlandTaxAmount", formatted.InlandTaxAmount, "478,70")
+	assertString(t, "InlandTaxDetails[0].Amount", formatted.InlandTaxDetails[0].Amount, "12,30")
+	assertString(t, "Quantity", formatted.Quantity, "1,5")
+	assertString(t, "ForeignFeesAmount", formatted.ForeignFeesAmount, "1,2")
+}
+
 func TestValidateDividendEntryCurrencyPairsAcceptsKnownCurrencies(t *testing.T) {
 	database := newCurrencyValidationTestDB(t)
 	entry := validDividendEntryPayloadForValidation()
