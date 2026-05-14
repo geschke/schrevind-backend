@@ -175,6 +175,8 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/dividend-entries/:id", dividendEntriesCtl.Options)
 		router.POST("/api/dividend-entries/add", dividendEntriesCtl.PostAdd)
 		router.OPTIONS("/api/dividend-entries/add", dividendEntriesCtl.Options)
+		router.POST("/api/dividend-entries/calculate-withholding-tax-refund", dividendEntriesCtl.PostCalculateWithholdingTaxRefund)
+		router.OPTIONS("/api/dividend-entries/calculate-withholding-tax-refund", dividendEntriesCtl.Options)
 		router.POST("/api/dividend-entries/update/:id", dividendEntriesCtl.PostUpdate)
 		router.OPTIONS("/api/dividend-entries/update/:id", dividendEntriesCtl.Options)
 		router.POST("/api/dividend-entries/delete/:id", dividendEntriesCtl.PostDelete)

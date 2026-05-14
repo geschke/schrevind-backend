@@ -178,6 +178,15 @@ type baseAmount struct {
 	Value decimal.Decimal
 }
 
+type withholdingTaxRefundCalculation struct {
+	Amount        string
+	Currency      string
+	Default       db.WithholdingTaxDefault
+	RefundPercent string
+	Source        string
+	Capped        bool
+}
+
 // ensureAuthorized verifies database/session setup and requires an authenticated session.
 func (ct DividendEntriesController) ensureAuthorized(c *gin.Context) bool {
 	if ct.DB == nil || ct.DB.SQL == nil {
@@ -786,6 +795,184 @@ func prepareCalculatedDividendFields(database *db.DB, groupID int64, entry *db.D
 	return nil
 }
 
+func validateWithholdingTaxRefundCalculationInput(database *db.DB, groupID int64, entry *db.DividendEntry, errors fieldErrors) error {
+	entry.GrossAmount = strings.TrimSpace(entry.GrossAmount)
+	entry.GrossCurrency = strings.TrimSpace(entry.GrossCurrency)
+	entry.WithholdingTaxCountryCode = strings.ToUpper(strings.TrimSpace(entry.WithholdingTaxCountryCode))
+	entry.WithholdingTaxAmount = strings.TrimSpace(entry.WithholdingTaxAmount)
+	entry.WithholdingTaxCurrency = strings.TrimSpace(entry.WithholdingTaxCurrency)
+	entry.FXRateLabel = strings.TrimSpace(entry.FXRateLabel)
+	entry.FXRate = strings.TrimSpace(entry.FXRate)
+
+	if groupID <= 0 {
+		errors["ContextGroupID"] = "INVALID_GROUP_ID"
+	}
+	if entry.DepotID <= 0 {
+		errors["DepotID"] = "INVALID_DEPOT_ID"
+	}
+	if entry.GrossAmount == "" {
+		errors["GrossAmount"] = "MISSING_GROSS_AMOUNT"
+	} else if normalized, err := validate.NormalizeDecimalString(entry.GrossAmount, false); err != nil {
+		errors["GrossAmount"] = err.Error()
+	} else {
+		entry.GrossAmount = normalized
+	}
+	if entry.GrossCurrency == "" {
+		errors["GrossCurrency"] = "MISSING_GROSS_CURRENCY"
+	} else if !isStrictCurrencyCode(entry.GrossCurrency) {
+		errors["GrossCurrency"] = errCurrencyInvalidFormat
+	} else if groupID > 0 {
+		known, err := isKnownCurrency(database, groupID, entry.GrossCurrency)
+		if err != nil {
+			return err
+		}
+		if !known {
+			errors["GrossCurrency"] = errCurrencyUnknown
+		}
+	}
+	if entry.WithholdingTaxCountryCode == "" {
+		errors["WithholdingTaxCountryCode"] = "MISSING_WITHHOLDING_TAX_COUNTRY_CODE"
+	}
+	if entry.WithholdingTaxAmount == "" {
+		errors["WithholdingTaxAmount"] = "MISSING_WITHHOLDING_TAX_AMOUNT"
+	} else if normalized, err := validate.NormalizeDecimalString(entry.WithholdingTaxAmount, false); err != nil {
+		errors["WithholdingTaxAmount"] = err.Error()
+	} else {
+		entry.WithholdingTaxAmount = normalized
+	}
+	if entry.WithholdingTaxCurrency == "" {
+		errors["WithholdingTaxCurrency"] = "MISSING_WITHHOLDING_TAX_CURRENCY"
+	} else if !isStrictCurrencyCode(entry.WithholdingTaxCurrency) {
+		errors["WithholdingTaxCurrency"] = errCurrencyInvalidFormat
+	} else if groupID > 0 {
+		known, err := isKnownCurrency(database, groupID, entry.WithholdingTaxCurrency)
+		if err != nil {
+			return err
+		}
+		if !known {
+			errors["WithholdingTaxCurrency"] = errCurrencyUnknown
+		}
+	}
+
+	return nil
+}
+
+func calculateWithholdingTaxRefund(database *db.DB, groupID int64, entry *db.DividendEntry, errors fieldErrors) (withholdingTaxRefundCalculation, error) {
+	depot, found, err := database.GetDepotByID(entry.DepotID)
+	if err != nil {
+		return withholdingTaxRefundCalculation{}, err
+	}
+	if !found {
+		errors["DepotID"] = errDepotNotFound
+		return withholdingTaxRefundCalculation{}, nil
+	}
+
+	baseCurrency := strings.TrimSpace(depot.BaseCurrency)
+	if baseCurrency == "" {
+		errors["DepotID"] = errBaseCurrencyMissing
+		return withholdingTaxRefundCalculation{}, nil
+	}
+	if !isStrictCurrencyCode(baseCurrency) {
+		errors["DepotID"] = errCurrencyInvalidFormat
+		return withholdingTaxRefundCalculation{}, nil
+	}
+
+	baseCurrencyItem, err := database.GetCurrencyByCurrencyAndGroupID(baseCurrency, groupID)
+	if err != nil {
+		return withholdingTaxRefundCalculation{}, err
+	}
+	if baseCurrencyItem == nil {
+		errors["DepotID"] = errCurrencyUnknown
+		return withholdingTaxRefundCalculation{}, nil
+	}
+
+	if err := validateDividendEntryFXRate(database, groupID, entry, errors); err != nil {
+		return withholdingTaxRefundCalculation{}, err
+	}
+	if len(errors) > 0 {
+		return withholdingTaxRefundCalculation{}, nil
+	}
+
+	defaults, err := database.GetEffectiveWithholdingTaxDefault(groupID, entry.DepotID, entry.WithholdingTaxCountryCode)
+	if err != nil {
+		return withholdingTaxRefundCalculation{}, err
+	}
+	if defaults == nil {
+		errors["WithholdingTaxCountryCode"] = "WITHHOLDING_TAX_DEFAULT_NOT_FOUND"
+		return withholdingTaxRefundCalculation{}, nil
+	}
+
+	withholdingPercentRaw := strings.TrimSpace(defaults.WithholdingTaxPercentDefault)
+	if withholdingPercentRaw == "" {
+		errors["WithholdingTaxPercentDefault"] = "WITHHOLDING_TAX_PERCENT_MISSING"
+		return withholdingTaxRefundCalculation{}, nil
+	}
+	withholdingPercentRaw, err = validate.NormalizeDecimalString(withholdingPercentRaw, false)
+	if err != nil {
+		errors["WithholdingTaxPercentDefault"] = "INVALID_WITHHOLDING_TAX_PERCENT"
+		return withholdingTaxRefundCalculation{}, nil
+	}
+	creditPercentRaw := strings.TrimSpace(defaults.WithholdingTaxPercentCreditDefault)
+	if creditPercentRaw == "" {
+		errors["WithholdingTaxPercentCreditDefault"] = "WITHHOLDING_TAX_CREDIT_PERCENT_MISSING"
+		return withholdingTaxRefundCalculation{}, nil
+	}
+	creditPercentRaw, err = validate.NormalizeDecimalString(creditPercentRaw, false)
+	if err != nil {
+		errors["WithholdingTaxPercentCreditDefault"] = "INVALID_WITHHOLDING_TAX_CREDIT_PERCENT"
+		return withholdingTaxRefundCalculation{}, nil
+	}
+
+	withholdingPercent, err := decimal.NewFromString(withholdingPercentRaw)
+	if err != nil {
+		errors["WithholdingTaxPercentDefault"] = "INVALID_WITHHOLDING_TAX_PERCENT"
+		return withholdingTaxRefundCalculation{}, nil
+	}
+	creditPercent, err := decimal.NewFromString(creditPercentRaw)
+	if err != nil {
+		errors["WithholdingTaxPercentCreditDefault"] = "INVALID_WITHHOLDING_TAX_CREDIT_PERCENT"
+		return withholdingTaxRefundCalculation{}, nil
+	}
+
+	refundPercent := withholdingPercent.Sub(creditPercent)
+	if refundPercent.IsNegative() {
+		refundPercent = decimal.Zero
+	}
+
+	grossBase, ok := convertAmountToBase(entry.GrossAmount, entry.GrossCurrency, "GrossAmount", baseCurrency, entry.FXRateLabel, entry.FXRate, errors)
+	if !ok {
+		return withholdingTaxRefundCalculation{}, nil
+	}
+	withholdingBase, ok := convertAmountToBase(entry.WithholdingTaxAmount, entry.WithholdingTaxCurrency, "WithholdingTaxAmount", baseCurrency, entry.FXRateLabel, entry.FXRate, errors)
+	if !ok {
+		return withholdingTaxRefundCalculation{}, nil
+	}
+
+	refundAmount := grossBase.Value.Mul(refundPercent).Div(decimal.NewFromInt(100))
+	capped := false
+	if refundAmount.GreaterThan(withholdingBase.Value) {
+		refundAmount = withholdingBase.Value
+		capped = true
+	}
+	if refundAmount.IsNegative() {
+		refundAmount = decimal.Zero
+	}
+
+	source := "group"
+	if defaults.DepotID > 0 {
+		source = "depot"
+	}
+
+	return withholdingTaxRefundCalculation{
+		Amount:        formatCalculatedDecimal(refundAmount, int32(baseCurrencyItem.DecimalPlaces)),
+		Currency:      baseCurrency,
+		Default:       *defaults,
+		RefundPercent: refundPercent.String(),
+		Source:        source,
+		Capped:        capped,
+	}, nil
+}
+
 // convertAmountToBase converts an amount into the depot base currency using the validated FX pair.
 func convertAmountToBase(amount, currency, amountFieldName, baseCurrency, fxRateLabel, fxRate string, errors fieldErrors) (baseAmount, bool) {
 	amountDecimal, err := decimal.NewFromString(amount)
@@ -1274,6 +1461,108 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		"success": true,
 		"count":   count,
 		"items":   items,
+	})
+}
+
+// PostCalculateWithholdingTaxRefund calculates a refundable withholding tax amount without storing data.
+func (ct DividendEntriesController) PostCalculateWithholdingTaxRefund(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	var req addDividendEntryRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+
+	entry := db.DividendEntry{
+		DepotID:                   req.DepotID,
+		GrossAmount:               req.GrossAmount,
+		GrossCurrency:             req.GrossCurrency,
+		WithholdingTaxCountryCode: req.WithholdingTaxCountryCode,
+		WithholdingTaxAmount:      req.WithholdingTaxAmount,
+		WithholdingTaxCurrency:    req.WithholdingTaxCurrency,
+		FXRateLabel:               req.FXRateLabel,
+		FXRate:                    req.FXRate,
+	}
+	fieldErrors := fieldErrors{}
+
+	if err := validateWithholdingTaxRefundCalculationInput(ct.DB, req.ContextGroupID, &entry, fieldErrors); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if len(fieldErrors) > 0 {
+		writeFieldErrors(c, fieldErrors)
+		return
+	}
+
+	inGroup, err := ct.DB.IsUserInGroup(req.ContextGroupID, sessionUserID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !inGroup {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:create", entry.DepotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+		return
+	}
+
+	result, err := calculateWithholdingTaxRefund(ct.DB, req.ContextGroupID, &entry, fieldErrors)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if len(fieldErrors) > 0 {
+		writeFieldErrors(c, fieldErrors)
+		return
+	}
+
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	message := "WITHHOLDING_TAX_REFUND_CALCULATED"
+	if result.Capped {
+		message = "WITHHOLDING_TAX_REFUND_CALCULATED_CAPPED"
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": message,
+		"data": gin.H{
+			"WithholdingTaxAmountRefundable":         displayformat.DecimalForLocale(result.Amount, locale),
+			"WithholdingTaxAmountRefundableCurrency": result.Currency,
+			"WithholdingTaxPercentDefault":           result.Default.WithholdingTaxPercentDefault,
+			"WithholdingTaxPercentCreditDefault":     result.Default.WithholdingTaxPercentCreditDefault,
+			"WithholdingTaxRefundPercent":            result.RefundPercent,
+			"Source":                                 result.Source,
+			"Capped":                                 result.Capped,
+		},
 	})
 }
 

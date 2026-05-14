@@ -390,6 +390,116 @@ func TestPrepareCalculatedDividendFieldsReportsPairMismatch(t *testing.T) {
 	assertFieldError(t, errors, "FXRateLabel", errFXRatePairMismatch)
 }
 
+func TestCalculateWithholdingTaxRefundPrefersDepotDefault(t *testing.T) {
+	database := newCurrencyValidationTestDB(t)
+	depotID := createCalculationTestDepot(t, database, "EUR")
+	createWithholdingTaxDefaultForCalculation(t, database, 0, "US", "30", "15")
+	createWithholdingTaxDefaultForCalculation(t, database, depotID, "US", "25", "15")
+	entry := db.DividendEntry{
+		DepotID:                   depotID,
+		GrossAmount:               "100.00",
+		GrossCurrency:             "EUR",
+		WithholdingTaxCountryCode: "US",
+		WithholdingTaxAmount:      "20.00",
+		WithholdingTaxCurrency:    "EUR",
+	}
+	errors := fieldErrors{}
+
+	result, err := calculateWithholdingTaxRefund(database, testCurrencyGroupID, &entry, errors)
+	if err != nil {
+		t.Fatalf("calculateWithholdingTaxRefund() error = %v", err)
+	}
+	if len(errors) > 0 {
+		t.Fatalf("calculateWithholdingTaxRefund() field errors = %v", errors)
+	}
+
+	assertString(t, "Amount", result.Amount, "10.00")
+	assertString(t, "Currency", result.Currency, "EUR")
+	assertString(t, "RefundPercent", result.RefundPercent, "10")
+	assertString(t, "Source", result.Source, "depot")
+}
+
+func TestCalculateWithholdingTaxRefundFallsBackToGroupAndCapsAtWithholding(t *testing.T) {
+	database := newCurrencyValidationTestDB(t)
+	depotID := createCalculationTestDepot(t, database, "EUR")
+	createWithholdingTaxDefaultForCalculation(t, database, 0, "CH", "35", "15")
+	entry := db.DividendEntry{
+		DepotID:                   depotID,
+		GrossAmount:               "100.00",
+		GrossCurrency:             "EUR",
+		WithholdingTaxCountryCode: "CH",
+		WithholdingTaxAmount:      "12.00",
+		WithholdingTaxCurrency:    "EUR",
+	}
+	errors := fieldErrors{}
+
+	result, err := calculateWithholdingTaxRefund(database, testCurrencyGroupID, &entry, errors)
+	if err != nil {
+		t.Fatalf("calculateWithholdingTaxRefund() error = %v", err)
+	}
+	if len(errors) > 0 {
+		t.Fatalf("calculateWithholdingTaxRefund() field errors = %v", errors)
+	}
+
+	assertString(t, "Amount", result.Amount, "12.00")
+	assertString(t, "Currency", result.Currency, "EUR")
+	assertString(t, "RefundPercent", result.RefundPercent, "20")
+	assertString(t, "Source", result.Source, "group")
+	if !result.Capped {
+		t.Fatalf("Capped = false, want true")
+	}
+}
+
+func TestCalculateWithholdingTaxRefundConvertsToDepotCurrency(t *testing.T) {
+	database := newCurrencyValidationTestDB(t)
+	depotID := createCalculationTestDepot(t, database, "EUR")
+	createWithholdingTaxDefaultForCalculation(t, database, 0, "US", "30", "15")
+	entry := db.DividendEntry{
+		DepotID:                   depotID,
+		GrossAmount:               "100.00",
+		GrossCurrency:             "USD",
+		WithholdingTaxCountryCode: "US",
+		WithholdingTaxAmount:      "30.00",
+		WithholdingTaxCurrency:    "USD",
+		FXRateLabel:               "USD/EUR",
+		FXRate:                    "0.9",
+	}
+	errors := fieldErrors{}
+
+	result, err := calculateWithholdingTaxRefund(database, testCurrencyGroupID, &entry, errors)
+	if err != nil {
+		t.Fatalf("calculateWithholdingTaxRefund() error = %v", err)
+	}
+	if len(errors) > 0 {
+		t.Fatalf("calculateWithholdingTaxRefund() field errors = %v", errors)
+	}
+
+	assertString(t, "Amount", result.Amount, "13.50")
+	assertString(t, "Currency", result.Currency, "EUR")
+}
+
+func TestCalculateWithholdingTaxRefundReportsMissingCreditPercent(t *testing.T) {
+	database := newCurrencyValidationTestDB(t)
+	depotID := createCalculationTestDepot(t, database, "EUR")
+	createWithholdingTaxDefaultForCalculation(t, database, 0, "US", "30", "")
+	entry := db.DividendEntry{
+		DepotID:                   depotID,
+		GrossAmount:               "100.00",
+		GrossCurrency:             "EUR",
+		WithholdingTaxCountryCode: "US",
+		WithholdingTaxAmount:      "30.00",
+		WithholdingTaxCurrency:    "EUR",
+	}
+	errors := fieldErrors{}
+
+	_, err := calculateWithholdingTaxRefund(database, testCurrencyGroupID, &entry, errors)
+	if err != nil {
+		t.Fatalf("calculateWithholdingTaxRefund() error = %v", err)
+	}
+
+	assertFieldError(t, errors, "WithholdingTaxPercentCreditDefault", "WITHHOLDING_TAX_CREDIT_PERCENT_MISSING")
+}
+
 func newCurrencyValidationTestDB(t *testing.T) *db.DB {
 	t.Helper()
 
@@ -434,6 +544,22 @@ func createCalculationTestCurrency(t *testing.T, database *db.DB, currency strin
 	}
 	if err := database.CreateCurrency(&item); err != nil {
 		t.Fatalf("create currency: %v", err)
+	}
+}
+
+func createWithholdingTaxDefaultForCalculation(t *testing.T, database *db.DB, depotID int64, countryCode, withholdingPercent, creditPercent string) {
+	t.Helper()
+
+	item := db.WithholdingTaxDefault{
+		GroupID:                            testCurrencyGroupID,
+		DepotID:                            depotID,
+		CountryCode:                        countryCode,
+		CountryName:                        countryCode,
+		WithholdingTaxPercentDefault:       withholdingPercent,
+		WithholdingTaxPercentCreditDefault: creditPercent,
+	}
+	if err := database.CreateWithholdingTaxDefault(&item); err != nil {
+		t.Fatalf("CreateWithholdingTaxDefault() error = %v", err)
 	}
 }
 
