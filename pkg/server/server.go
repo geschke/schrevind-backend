@@ -171,6 +171,8 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/dividend-entries/by-depot/:depot_id", dividendEntriesCtl.Options)
 		router.GET("/api/dividend-entries/by-security/:security_id", dividendEntriesCtl.GetListBySecurity)
 		router.OPTIONS("/api/dividend-entries/by-security/:security_id", dividendEntriesCtl.Options)
+		router.GET("/api/dividend-entries/first-year", dividendEntriesCtl.GetFirstYear)
+		router.OPTIONS("/api/dividend-entries/first-year", dividendEntriesCtl.Options)
 		router.GET("/api/dividend-entries/:id", dividendEntriesCtl.GetByID)
 		router.OPTIONS("/api/dividend-entries/:id", dividendEntriesCtl.Options)
 		router.POST("/api/dividend-entries/add", dividendEntriesCtl.PostAdd)

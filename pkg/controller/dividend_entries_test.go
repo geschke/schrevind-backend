@@ -52,6 +52,24 @@ func TestNormalizeDividendEntryPayloadNormalizesDecimalFields(t *testing.T) {
 	assertString(t, "ForeignFeesAmount", entry.ForeignFeesAmount, "1.23")
 }
 
+func TestNormalizeDividendEntrySearch(t *testing.T) {
+	got, ok := normalizeDividendEntrySearch("  Cola   Drinks AG  ")
+	if !ok {
+		t.Fatalf("normalizeDividendEntrySearch() ok = false")
+	}
+	if got != "Cola Drinks AG" {
+		t.Fatalf("normalizeDividendEntrySearch() = %q, want normalized spaces", got)
+	}
+
+	if _, ok := normalizeDividendEntrySearch("Cola; DROP"); ok {
+		t.Fatalf("normalizeDividendEntrySearch() accepted invalid characters")
+	}
+
+	if _, ok := normalizeDividendEntrySearch("123456789012345678901234567890123456789012345678901"); ok {
+		t.Fatalf("normalizeDividendEntrySearch() accepted value longer than 50 characters")
+	}
+}
+
 func TestNormalizeDividendEntryPayloadCollectsFieldErrors(t *testing.T) {
 	entry := validDividendEntryPayloadForValidation()
 	entry.DepotID = 0

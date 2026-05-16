@@ -265,6 +265,19 @@ func parseDepotIDParamForDividendEntries(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
+func parseOptionalDepotIDQueryForDividendEntries(c *gin.Context) (int64, bool) {
+	raw, exists := c.GetQuery("depot_id")
+	if !exists || strings.TrimSpace(raw) == "" {
+		return 0, true
+	}
+	id, err := strconv.ParseInt(strings.TrimSpace(raw), 10, 64)
+	if err != nil || id <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_DEPOT_ID"})
+		return 0, false
+	}
+	return id, true
+}
+
 // parseSecurityIDParam parses and validates the security_id path parameter.
 func parseSecurityIDParam(c *gin.Context) (int64, bool) {
 	id, err := strconv.ParseInt(strings.TrimSpace(c.Param("security_id")), 10, 64)
@@ -285,14 +298,43 @@ func parseDividendEntryContextGroupID(c *gin.Context) (int64, bool) {
 	return groupID, true
 }
 
-// parseDividendEntryListParams parses pagination, sorting, direction, and optional date filters.
-func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, string, string, bool) {
+func normalizeDividendEntrySearch(value string) (string, bool) {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if value == "" {
+		return "", true
+	}
+	if len(value) > 50 {
+		return "", false
+	}
+	for i := 0; i < len(value); i++ {
+		ch := value[i]
+		if ch >= 'a' && ch <= 'z' {
+			continue
+		}
+		if ch >= 'A' && ch <= 'Z' {
+			continue
+		}
+		if ch >= '0' && ch <= '9' {
+			continue
+		}
+		switch ch {
+		case ' ', '.', '-', '_', '/':
+			continue
+		default:
+			return "", false
+		}
+	}
+	return value, true
+}
+
+// parseDividendEntryListParams parses pagination, sorting, direction, and optional filters.
+func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, db.DividendEntryListFilters, bool) {
 	limit := 20
 	if v := strings.TrimSpace(c.Query("limit")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > 100 {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_LIMIT"})
-			return 0, 0, "", "", "", "", false
+			return 0, 0, "", "", db.DividendEntryListFilters{}, false
 		}
 		limit = n
 	}
@@ -302,7 +344,7 @@ func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, str
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_OFFSET"})
-			return 0, 0, "", "", "", "", false
+			return 0, 0, "", "", db.DividendEntryListFilters{}, false
 		}
 		offset = n
 	}
@@ -314,7 +356,7 @@ func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, str
 			sortBy = v
 		default:
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_SORT"})
-			return 0, 0, "", "", "", "", false
+			return 0, 0, "", "", db.DividendEntryListFilters{}, false
 		}
 	}
 
@@ -329,18 +371,51 @@ func parseDividendEntryListParams(c *gin.Context) (int, int, string, string, str
 			direction = "ASC"
 		default:
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_DIRECTION"})
-			return 0, 0, "", "", "", "", false
+			return 0, 0, "", "", db.DividendEntryListFilters{}, false
 		}
 	}
 
-	fromDate := strings.TrimSpace(c.Query("from"))
-	toDate := strings.TrimSpace(c.Query("to"))
-	if fromDate != "" && toDate != "" && fromDate > toDate {
+	filters := db.DividendEntryListFilters{
+		FromDate: strings.TrimSpace(c.Query("from")),
+		ToDate:   strings.TrimSpace(c.Query("to")),
+	}
+	if filters.FromDate != "" && filters.ToDate != "" && filters.FromDate > filters.ToDate {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_DATE_RANGE"})
-		return 0, 0, "", "", "", "", false
+		return 0, 0, "", "", db.DividendEntryListFilters{}, false
 	}
 
-	return limit, offset, sortBy, direction, fromDate, toDate, true
+	if v := strings.TrimSpace(c.Query("year")); v != "" {
+		if len(v) != 4 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_YEAR"})
+			return 0, 0, "", "", db.DividendEntryListFilters{}, false
+		}
+		year, err := strconv.Atoi(v)
+		if err != nil || year < 1 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_YEAR"})
+			return 0, 0, "", "", db.DividendEntryListFilters{}, false
+		}
+		filters.Year = year
+	}
+
+	if v := strings.TrimSpace(c.Query("depot_id")); v != "" {
+		depotID, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || depotID <= 0 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_DEPOT_ID"})
+			return 0, 0, "", "", db.DividendEntryListFilters{}, false
+		}
+		filters.DepotID = depotID
+	}
+
+	if _, exists := c.GetQuery("search"); exists {
+		search, ok := normalizeDividendEntrySearch(c.Query("search"))
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_SEARCH"})
+			return 0, 0, "", "", db.DividendEntryListFilters{}, false
+		}
+		filters.Search = search
+	}
+
+	return limit, offset, sortBy, direction, filters, true
 }
 
 // addRequiredStringFieldError adds a field error when a required string is empty after trimming.
@@ -1254,18 +1329,18 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 		return
 	}
 
-	limit, offset, sortBy, direction, fromDate, toDate, ok := parseDividendEntryListParams(c)
+	limit, offset, sortBy, direction, filters, ok := parseDividendEntryListParams(c)
 	if !ok {
 		return
 	}
 
-	items, err := ct.DB.ListAccessibleDividendEntriesByUser(requestedUserID, scope.All, scope.Roles, limit, offset, sortBy, direction, fromDate, toDate)
+	items, err := ct.DB.ListAccessibleDividendEntriesByUser(requestedUserID, scope.All, scope.Roles, limit, offset, sortBy, direction, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 
-	count, err := ct.DB.CountAccessibleDividendEntriesByUser(requestedUserID, scope.All, scope.Roles, fromDate, toDate)
+	count, err := ct.DB.CountAccessibleDividendEntriesByUser(requestedUserID, scope.All, scope.Roles, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1291,6 +1366,80 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 		"success": true,
 		"count":   count,
 		"items":   items,
+	})
+}
+
+// GetFirstYear handles GET /api/dividend-entries/first-year.
+func (ct DividendEntriesController) GetFirstYear(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	depotID, ok := parseOptionalDepotIDQueryForDividendEntries(c)
+	if !ok {
+		return
+	}
+
+	year := 0
+	if depotID > 0 {
+		allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:list", depotID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+			return
+		}
+
+		firstYear, found, err := ct.DB.GetFirstDividendEntryYearByDepotID(depotID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if found {
+			year = firstYear
+		}
+	} else {
+		allowed, err := ct.G.CanDoAny(sessionUserID, db.EntityTypeDepot, "entries:list")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
+
+		scope, err := ct.G.ScopeForAction(sessionUserID, db.EntityTypeDepot, "entries:list")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+
+		firstYear, found, err := ct.DB.GetFirstAccessibleDividendEntryYearByUser(sessionUserID, scope.All, scope.Roles)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if found {
+			year = firstYear
+		}
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "DIVIDEND_ENTRY_FIRST_YEAR_LOADED",
+		"year":    year,
 	})
 }
 
@@ -1324,18 +1473,19 @@ func (ct DividendEntriesController) GetListByDepot(c *gin.Context) {
 		return
 	}
 
-	limit, offset, sortBy, direction, fromDate, toDate, ok := parseDividendEntryListParams(c)
+	limit, offset, sortBy, direction, filters, ok := parseDividendEntryListParams(c)
 	if !ok {
 		return
 	}
+	filters.DepotID = 0
 
-	items, err := ct.DB.ListDividendEntriesByDepotID(depotID, limit, offset, sortBy, direction, fromDate, toDate)
+	items, err := ct.DB.ListDividendEntriesByDepotID(depotID, limit, offset, sortBy, direction, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 
-	count, err := ct.DB.CountDividendEntriesByDepotID(depotID, fromDate, toDate)
+	count, err := ct.DB.CountDividendEntriesByDepotID(depotID, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1424,18 +1574,18 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		return
 	}
 
-	limit, offset, sortBy, direction, fromDate, toDate, ok := parseDividendEntryListParams(c)
+	limit, offset, sortBy, direction, filters, ok := parseDividendEntryListParams(c)
 	if !ok {
 		return
 	}
 
-	items, err := ct.DB.ListAccessibleDividendEntriesBySecurityID(sessionUserID, scope.All, scope.Roles, securityID, limit, offset, sortBy, direction, fromDate, toDate)
+	items, err := ct.DB.ListAccessibleDividendEntriesBySecurityID(sessionUserID, scope.All, scope.Roles, securityID, limit, offset, sortBy, direction, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 
-	count, err := ct.DB.CountAccessibleDividendEntriesBySecurityID(sessionUserID, scope.All, scope.Roles, securityID, fromDate, toDate)
+	count, err := ct.DB.CountAccessibleDividendEntriesBySecurityID(sessionUserID, scope.All, scope.Roles, securityID, filters)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

@@ -1,6 +1,7 @@
 package db
 
 import (
+	"context"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -152,5 +153,133 @@ func TestGetDividendEntryRejectsBrokenInlandTaxDetailsJSON(t *testing.T) {
 	_, _, err := database.GetDividendEntryByID(entry.ID)
 	if err == nil || !strings.Contains(err.Error(), "invalid JSON array") {
 		t.Fatalf("GetDividendEntryByID() error = %v, want invalid JSON array", err)
+	}
+}
+
+func TestListAccessibleDividendEntriesByUserAppliesOptionalFilters(t *testing.T) {
+	database := newDividendEntriesTestDB(t)
+
+	first := validDividendEntryForDBTest(t, database)
+	first.PayDate = "2024-04-15"
+	first.SecurityName = "Cola Drinks AG"
+	first.SecurityISIN = "DE000COLA001"
+	first.SecurityWKN = "COLA01"
+	first.SecuritySymbol = "COL"
+	if err := database.CreateDividendEntry(&first); err != nil {
+		t.Fatalf("CreateDividendEntry(first) error = %v", err)
+	}
+
+	second := validDividendEntryForDBTest(t, database)
+	second.PayDate = "2025-05-15"
+	second.SecurityName = "Chocolate AG"
+	second.SecurityISIN = "AT000CHOC001"
+	second.SecurityWKN = "CHOC01"
+	second.SecuritySymbol = "CHO"
+	if err := database.CreateDividendEntry(&second); err != nil {
+		t.Fatalf("CreateDividendEntry(second) error = %v", err)
+	}
+
+	filters := DividendEntryListFilters{
+		Search:  "cola",
+		Year:    2024,
+		DepotID: first.DepotID,
+	}
+	items, err := database.ListAccessibleDividendEntriesByUser(1, true, nil, 20, 0, "PayDate", "ASC", filters)
+	if err != nil {
+		t.Fatalf("ListAccessibleDividendEntriesByUser() error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != first.ID {
+		t.Fatalf("filtered items = %+v, want only first entry", items)
+	}
+
+	count, err := database.CountAccessibleDividendEntriesByUser(1, true, nil, filters)
+	if err != nil {
+		t.Fatalf("CountAccessibleDividendEntriesByUser() error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("filtered count = %d, want 1", count)
+	}
+}
+
+func TestGetFirstDividendEntryYearByDepotID(t *testing.T) {
+	database := newDividendEntriesTestDB(t)
+
+	newer := validDividendEntryForDBTest(t, database)
+	newer.PayDate = "2024-05-15"
+	if err := database.CreateDividendEntry(&newer); err != nil {
+		t.Fatalf("CreateDividendEntry(newer) error = %v", err)
+	}
+
+	older := validDividendEntryForDBTest(t, database)
+	older.DepotID = newer.DepotID
+	older.PayDate = "2021-04-15"
+	if err := database.CreateDividendEntry(&older); err != nil {
+		t.Fatalf("CreateDividendEntry(older) error = %v", err)
+	}
+
+	year, found, err := database.GetFirstDividendEntryYearByDepotID(newer.DepotID)
+	if err != nil {
+		t.Fatalf("GetFirstDividendEntryYearByDepotID() error = %v", err)
+	}
+	if !found {
+		t.Fatalf("GetFirstDividendEntryYearByDepotID() found = false")
+	}
+	if year != 2021 {
+		t.Fatalf("GetFirstDividendEntryYearByDepotID() year = %d, want 2021", year)
+	}
+}
+
+func TestGetFirstAccessibleDividendEntryYearByUser(t *testing.T) {
+	database := newDividendEntriesTestDB(t)
+	userID, err := database.CreateUser(context.Background(), User{
+		Password:  "secret",
+		FirstName: "Dividend",
+		LastName:  "Tester",
+		Email:     "dividend-tester@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	entry := validDividendEntryForDBTest(t, database)
+	entry.PayDate = "2022-03-15"
+	if err := database.CreateDividendEntry(&entry); err != nil {
+		t.Fatalf("CreateDividendEntry(entry) error = %v", err)
+	}
+	if err := database.GrantMembership(&Membership{
+		EntityType: EntityTypeDepot,
+		EntityID:   entry.DepotID,
+		UserID:     userID,
+		Role:       RoleDepotViewer,
+	}); err != nil {
+		t.Fatalf("GrantMembership() error = %v", err)
+	}
+
+	year, found, err := database.GetFirstAccessibleDividendEntryYearByUser(userID, false, []string{RoleDepotViewer})
+	if err != nil {
+		t.Fatalf("GetFirstAccessibleDividendEntryYearByUser() error = %v", err)
+	}
+	if !found {
+		t.Fatalf("GetFirstAccessibleDividendEntryYearByUser() found = false")
+	}
+	if year != 2022 {
+		t.Fatalf("GetFirstAccessibleDividendEntryYearByUser() year = %d, want 2022", year)
+	}
+
+	otherUserID, err := database.CreateUser(context.Background(), User{
+		Password:  "secret",
+		FirstName: "Other",
+		LastName:  "Tester",
+		Email:     "other-dividend-tester@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser(other) error = %v", err)
+	}
+	_, found, err = database.GetFirstAccessibleDividendEntryYearByUser(otherUserID, false, []string{RoleDepotViewer})
+	if err != nil {
+		t.Fatalf("GetFirstAccessibleDividendEntryYearByUser(no membership) error = %v", err)
+	}
+	if found {
+		t.Fatalf("GetFirstAccessibleDividendEntryYearByUser(no membership) found = true")
 	}
 }

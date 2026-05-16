@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -62,6 +63,14 @@ type DividendEntry struct {
 
 	CreatedAt int64 `json:"CreatedAt,omitempty"`
 	UpdatedAt int64 `json:"UpdatedAt,omitempty"`
+}
+
+type DividendEntryListFilters struct {
+	FromDate string
+	ToDate   string
+	Search   string
+	Year     int
+	DepotID  int64
 }
 
 func EncodeInlandTaxDetails(details []InlandTaxDetail) (string, error) {
@@ -285,9 +294,17 @@ func normalizeDividendEntrySortDirection(direction string) (string, error) {
 	}
 }
 
-func appendDividendEntryDateFilters(query string, args []any, fromDate, toDate string) (string, []any) {
-	fromDate = strings.TrimSpace(fromDate)
-	toDate = strings.TrimSpace(toDate)
+func escapeDividendEntryLikePattern(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	value = strings.ReplaceAll(value, `_`, `\_`)
+	return value
+}
+
+func appendDividendEntryFilters(query string, args []any, filters DividendEntryListFilters) (string, []any) {
+	fromDate := strings.TrimSpace(filters.FromDate)
+	toDate := strings.TrimSpace(filters.ToDate)
+	search := strings.TrimSpace(filters.Search)
 
 	if fromDate != "" {
 		query += "   AND de.pay_date >= ?\n"
@@ -297,11 +314,31 @@ func appendDividendEntryDateFilters(query string, args []any, fromDate, toDate s
 		query += "   AND de.pay_date <= ?\n"
 		args = append(args, toDate)
 	}
+	if filters.Year > 0 {
+		query += "   AND de.pay_date >= ?\n"
+		query += "   AND de.pay_date <= ?\n"
+		args = append(args, fmt.Sprintf("%04d-01-01", filters.Year), fmt.Sprintf("%04d-12-31", filters.Year))
+	}
+	if filters.DepotID > 0 {
+		query += "   AND de.depot_id = ?\n"
+		args = append(args, filters.DepotID)
+	}
+	if search != "" {
+		pattern := "%" + escapeDividendEntryLikePattern(strings.ToLower(search)) + "%"
+		query += `   AND (
+       LOWER(de.security_name) LIKE ? ESCAPE '\'
+       OR LOWER(de.security_isin) LIKE ? ESCAPE '\'
+       OR LOWER(de.security_wkn) LIKE ? ESCAPE '\'
+       OR LOWER(de.security_symbol) LIKE ? ESCAPE '\'
+   )
+`
+		args = append(args, pattern, pattern, pattern, pattern)
+	}
 
 	return query, args
 }
 
-func (d *DB) listDividendEntriesByColumnPage(column string, value int64, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
+func (d *DB) listDividendEntriesByColumnPage(column string, value int64, limit, offset int, sortBy, direction string, filters DividendEntryListFilters) ([]DividendEntry, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
@@ -330,7 +367,7 @@ SELECT` + dividendEntrySelectColumns + `
  WHERE de.` + column + ` = ?
 `
 	args := []any{value}
-	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query, args = appendDividendEntryFilters(query, args, filters)
 	query += " ORDER BY " + sortColumn + " " + sortDirection + ", de.id " + sortDirection + "\n"
 	query += " LIMIT ? OFFSET ?;"
 	args = append(args, limit, offset)
@@ -356,7 +393,7 @@ SELECT` + dividendEntrySelectColumns + `
 	return out, nil
 }
 
-func (d *DB) countDividendEntriesByColumn(column string, value int64, fromDate, toDate string) (int64, error) {
+func (d *DB) countDividendEntriesByColumn(column string, value int64, filters DividendEntryListFilters) (int64, error) {
 	if d == nil || d.SQL == nil {
 		return 0, fmt.Errorf("db not initialized")
 	}
@@ -370,7 +407,7 @@ SELECT COUNT(*)
  WHERE de.` + column + ` = ?
 `
 	args := []any{value}
-	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query, args = appendDividendEntryFilters(query, args, filters)
 	query += ";"
 
 	var count int64
@@ -580,9 +617,101 @@ func appendDividendEntryRolesFilter(query string, args []any, roles []string) (s
 	return query, args
 }
 
+func dividendEntryYearFromPayDate(payDate string) (int, error) {
+	payDate = strings.TrimSpace(payDate)
+	if len(payDate) < 4 {
+		return 0, fmt.Errorf("invalid pay_date")
+	}
+	year, err := strconv.Atoi(payDate[:4])
+	if err != nil || year <= 0 {
+		return 0, fmt.Errorf("invalid pay_date")
+	}
+	return year, nil
+}
+
+// GetFirstDividendEntryYearByDepotID returns the first pay-date year for one depot.
+func (d *DB) GetFirstDividendEntryYearByDepotID(depotID int64) (int, bool, error) {
+	if d == nil || d.SQL == nil {
+		return 0, false, fmt.Errorf("db not initialized")
+	}
+	if depotID <= 0 {
+		return 0, false, fmt.Errorf("depotID must be > 0")
+	}
+
+	var payDate string
+	err := d.SQL.QueryRow(`
+SELECT de.pay_date
+  FROM dividend_entries de
+ WHERE de.depot_id = ?
+   AND TRIM(de.pay_date) <> ''
+ ORDER BY de.pay_date ASC, de.id ASC
+ LIMIT 1;
+`, depotID).Scan(&payDate)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("get first dividend entry year by depot: %w", err)
+	}
+
+	year, err := dividendEntryYearFromPayDate(payDate)
+	if err != nil {
+		return 0, false, fmt.Errorf("get first dividend entry year by depot: %w", err)
+	}
+	return year, true, nil
+}
+
+// GetFirstAccessibleDividendEntryYearByUser returns the first pay-date year for entries
+// accessible to the user for the requested action scope.
+func (d *DB) GetFirstAccessibleDividendEntryYearByUser(userID int64, all bool, roles []string) (int, bool, error) {
+	if d == nil || d.SQL == nil {
+		return 0, false, fmt.Errorf("db not initialized")
+	}
+	if userID <= 0 {
+		return 0, false, fmt.Errorf("userID must be > 0")
+	}
+
+	query := ""
+	args := make([]any, 0, 2+len(roles))
+	if all {
+		query = `
+SELECT de.pay_date
+  FROM dividend_entries de
+ WHERE TRIM(de.pay_date) <> ''
+`
+	} else {
+		query = `
+SELECT de.pay_date
+  FROM dividend_entries de
+  JOIN memberships m ON m.entity_type = ? AND m.entity_id = de.depot_id
+ WHERE m.user_id = ?
+   AND TRIM(de.pay_date) <> ''
+`
+		args = append(args, EntityTypeDepot, userID)
+		query, args = appendDividendEntryRolesFilter(query, args, roles)
+	}
+	query += " ORDER BY de.pay_date ASC, de.id ASC\n"
+	query += " LIMIT 1;"
+
+	var payDate string
+	err := d.SQL.QueryRow(query, args...).Scan(&payDate)
+	if err == sql.ErrNoRows {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, false, fmt.Errorf("get first accessible dividend entry year by user: %w", err)
+	}
+
+	year, err := dividendEntryYearFromPayDate(payDate)
+	if err != nil {
+		return 0, false, fmt.Errorf("get first accessible dividend entry year by user: %w", err)
+	}
+	return year, true, nil
+}
+
 // ListAccessibleDividendEntriesByUser returns a filtered and paginated list of dividend
 // entries accessible to the user for the requested action scope.
-func (d *DB) ListAccessibleDividendEntriesByUser(userID int64, all bool, roles []string, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
+func (d *DB) ListAccessibleDividendEntriesByUser(userID int64, all bool, roles []string, limit, offset int, sortBy, direction string, filters DividendEntryListFilters) ([]DividendEntry, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
@@ -624,7 +753,7 @@ SELECT` + dividendEntrySelectColumns + `
 		query, args = appendDividendEntryRolesFilter(query, args, roles)
 	}
 
-	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query, args = appendDividendEntryFilters(query, args, filters)
 	query += " ORDER BY " + sortColumn + " " + sortDirection + ", de.id " + sortDirection + "\n"
 	query += " LIMIT ? OFFSET ?;"
 	args = append(args, limit, offset)
@@ -652,7 +781,7 @@ SELECT` + dividendEntrySelectColumns + `
 
 // CountAccessibleDividendEntriesByUser returns the total number of filtered dividend
 // entries accessible to the user for the requested action scope.
-func (d *DB) CountAccessibleDividendEntriesByUser(userID int64, all bool, roles []string, fromDate, toDate string) (int64, error) {
+func (d *DB) CountAccessibleDividendEntriesByUser(userID int64, all bool, roles []string, filters DividendEntryListFilters) (int64, error) {
 	if d == nil || d.SQL == nil {
 		return 0, fmt.Errorf("db not initialized")
 	}
@@ -679,7 +808,7 @@ SELECT COUNT(*)
 		query, args = appendDividendEntryRolesFilter(query, args, roles)
 	}
 
-	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query, args = appendDividendEntryFilters(query, args, filters)
 	query += ";"
 
 	var count int64
@@ -691,7 +820,7 @@ SELECT COUNT(*)
 }
 
 // ListAccessibleDividendEntriesBySecurityID returns accessible dividend entries for a security.
-func (d *DB) ListAccessibleDividendEntriesBySecurityID(userID int64, all bool, roles []string, securityID int64, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
+func (d *DB) ListAccessibleDividendEntriesBySecurityID(userID int64, all bool, roles []string, securityID int64, limit, offset int, sortBy, direction string, filters DividendEntryListFilters) ([]DividendEntry, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
@@ -738,7 +867,7 @@ SELECT` + dividendEntrySelectColumns + `
 		query, args = appendDividendEntryRolesFilter(query, args, roles)
 	}
 
-	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query, args = appendDividendEntryFilters(query, args, filters)
 	query += " ORDER BY " + sortColumn + " " + sortDirection + ", de.id " + sortDirection + "\n"
 	query += " LIMIT ? OFFSET ?;"
 	args = append(args, limit, offset)
@@ -765,7 +894,7 @@ SELECT` + dividendEntrySelectColumns + `
 }
 
 // CountAccessibleDividendEntriesBySecurityID returns the total accessible entry count for a security.
-func (d *DB) CountAccessibleDividendEntriesBySecurityID(userID int64, all bool, roles []string, securityID int64, fromDate, toDate string) (int64, error) {
+func (d *DB) CountAccessibleDividendEntriesBySecurityID(userID int64, all bool, roles []string, securityID int64, filters DividendEntryListFilters) (int64, error) {
 	if d == nil || d.SQL == nil {
 		return 0, fmt.Errorf("db not initialized")
 	}
@@ -797,7 +926,7 @@ SELECT COUNT(*)
 		query, args = appendDividendEntryRolesFilter(query, args, roles)
 	}
 
-	query, args = appendDividendEntryDateFilters(query, args, fromDate, toDate)
+	query, args = appendDividendEntryFilters(query, args, filters)
 	query += ";"
 
 	var count int64
@@ -809,21 +938,21 @@ SELECT COUNT(*)
 }
 
 // ListDividendEntriesByDepotID returns a filtered and paginated list for the requested filter.
-func (d *DB) ListDividendEntriesByDepotID(depotID int64, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
-	return d.listDividendEntriesByColumnPage("depot_id", depotID, limit, offset, sortBy, direction, fromDate, toDate)
+func (d *DB) ListDividendEntriesByDepotID(depotID int64, limit, offset int, sortBy, direction string, filters DividendEntryListFilters) ([]DividendEntry, error) {
+	return d.listDividendEntriesByColumnPage("depot_id", depotID, limit, offset, sortBy, direction, filters)
 }
 
 // CountDividendEntriesByDepotID returns the total number of filtered records for the requested filter.
-func (d *DB) CountDividendEntriesByDepotID(depotID int64, fromDate, toDate string) (int64, error) {
-	return d.countDividendEntriesByColumn("depot_id", depotID, fromDate, toDate)
+func (d *DB) CountDividendEntriesByDepotID(depotID int64, filters DividendEntryListFilters) (int64, error) {
+	return d.countDividendEntriesByColumn("depot_id", depotID, filters)
 }
 
 // ListDividendEntriesBySecurityID returns a filtered and paginated list for the requested filter.
-func (d *DB) ListDividendEntriesBySecurityID(securityID int64, limit, offset int, sortBy, direction, fromDate, toDate string) ([]DividendEntry, error) {
-	return d.listDividendEntriesByColumnPage("security_id", securityID, limit, offset, sortBy, direction, fromDate, toDate)
+func (d *DB) ListDividendEntriesBySecurityID(securityID int64, limit, offset int, sortBy, direction string, filters DividendEntryListFilters) ([]DividendEntry, error) {
+	return d.listDividendEntriesByColumnPage("security_id", securityID, limit, offset, sortBy, direction, filters)
 }
 
 // CountDividendEntriesBySecurityID returns the total number of filtered records for the requested filter.
-func (d *DB) CountDividendEntriesBySecurityID(securityID int64, fromDate, toDate string) (int64, error) {
-	return d.countDividendEntriesByColumn("security_id", securityID, fromDate, toDate)
+func (d *DB) CountDividendEntriesBySecurityID(securityID int64, filters DividendEntryListFilters) (int64, error) {
+	return d.countDividendEntriesByColumn("security_id", securityID, filters)
 }

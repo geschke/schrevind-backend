@@ -499,7 +499,7 @@ func (d *DB) DeleteSecurity(id, groupID int64) error {
 
 // SecurityHasDividendEntries returns true when the security is referenced by dividend entries.
 func (d *DB) SecurityHasDividendEntries(securityID int64) (bool, error) {
-	count, err := d.CountDividendEntriesBySecurityID(securityID, "", "")
+	count, err := d.CountDividendEntriesBySecurityID(securityID, DividendEntryListFilters{})
 	if err != nil {
 		return false, err
 	}
