@@ -303,6 +303,35 @@ func TestBuildDividendsBySecurityYearRowsFormatsLocale(t *testing.T) {
 	assertSecurityYearRow(t, rows[1], "Example Alpha AG Ergebnis", "", "", "", "10,50", "8,25", "7,75")
 }
 
+func TestBuildDividendsBySecurityYearData(t *testing.T) {
+	data, ok := buildDividendsBySecurityYearData([]db.DividendsBySecurityYearDataSourceRow{
+		{SecurityID: 2, SecurityName: "Example Beta AG", SecurityISIN: "DE000BETA01", Year: "2023", PayDate: "2023-03-01", Quantity: "10", Gross: "5.00", AfterWithholding: "4.00", Net: "3.50"},
+		{SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Year: "2024", PayDate: "2024-01-10", Quantity: "75", Gross: "10.00", AfterWithholding: "8.00", Net: "7.50"},
+		{SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Year: "2024", PayDate: "2024-04-10", Quantity: "75", Gross: "20.00", AfterWithholding: "17.00", Net: "16.50"},
+		{SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Year: "2024", PayDate: "2024-07-10", Quantity: "90", Gross: "15.00", AfterWithholding: "13.00", Net: "12.50"},
+	}, 2, "EUR", "en-US")
+	if !ok {
+		t.Fatalf("buildDividendsBySecurityYearData() ok = false, want true")
+	}
+	if data.Currency != "EUR" {
+		t.Fatalf("buildDividendsBySecurityYearData() currency = %q, want EUR", data.Currency)
+	}
+	if len(data.Securities) != 2 {
+		t.Fatalf("buildDividendsBySecurityYearData() securities len = %d, want 2", len(data.Securities))
+	}
+	if data.Securities[0].SecurityID != 1 || data.Securities[0].SecurityName != "Example Alpha AG" {
+		t.Fatalf("first security = %+v, want Example Alpha AG", data.Securities[0])
+	}
+	if len(data.Securities[0].Rows) != 3 {
+		t.Fatalf("first security rows len = %d, want 3", len(data.Securities[0].Rows))
+	}
+	assertSecurityYearDataRow(t, data.Securities[0].Rows[0], "2024", "75", "30.00", "25.00", "24.00", "detail")
+	assertSecurityYearDataRow(t, data.Securities[0].Rows[1], "2024", "90", "15.00", "13.00", "12.50", "detail")
+	assertSecurityYearDataRow(t, data.Securities[0].Rows[2], "", "", "45.00", "38.00", "36.50", "summary")
+	assertSecurityYearDataRow(t, data.Securities[1].Rows[0], "2023", "10", "5.00", "4.00", "3.50", "detail")
+	assertSecurityYearDataRow(t, data.Securities[1].Rows[1], "", "", "5.00", "4.00", "3.50", "summary")
+}
+
 func TestBuildDividendsByYearMonthSecurityRows(t *testing.T) {
 	rows, ok := buildDividendsByYearMonthSecurityRows([]db.DividendsByYearMonthSecuritySourceRow{
 		{Year: "2024", Month: "01", SecurityID: 2, SecurityName: "Example Beta AG", SecurityISIN: "DE000BETA01", Gross: "5.00", AfterWithholding: "4.00", Net: "3.50"},
@@ -488,6 +517,28 @@ func assertSecurityYearRow(t *testing.T, row AnalysisRow, securityName, security
 	}
 	if row["net"] != net {
 		t.Fatalf("row net = %q, want %q", row["net"], net)
+	}
+}
+
+func assertSecurityYearDataRow(t *testing.T, row SecurityYearDataRow, year, quantity, gross, afterWithholding, net, rowType string) {
+	t.Helper()
+	if row.Year != year {
+		t.Fatalf("row Year = %q, want %q", row.Year, year)
+	}
+	if row.Quantity != quantity {
+		t.Fatalf("row Quantity = %q, want %q", row.Quantity, quantity)
+	}
+	if row.Gross != gross {
+		t.Fatalf("row Gross = %q, want %q", row.Gross, gross)
+	}
+	if row.AfterWithholding != afterWithholding {
+		t.Fatalf("row AfterWithholding = %q, want %q", row.AfterWithholding, afterWithholding)
+	}
+	if row.Net != net {
+		t.Fatalf("row Net = %q, want %q", row.Net, net)
+	}
+	if row.Type != rowType {
+		t.Fatalf("row Type = %q, want %q", row.Type, rowType)
 	}
 }
 
