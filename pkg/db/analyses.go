@@ -19,8 +19,8 @@ type DividendsByYearMonthSourceRow struct {
 	Net              string
 }
 
-// DividendsBySecurityYearSourceRow contains raw values used by the security/year dividend analysis.
-type DividendsBySecurityYearSourceRow struct {
+// DividendsBySecurityYearDataSourceRow contains raw values for the non-table security/year analysis.
+type DividendsBySecurityYearDataSourceRow struct {
 	SecurityID       int64
 	SecurityName     string
 	SecurityISIN     string
@@ -32,9 +32,6 @@ type DividendsBySecurityYearSourceRow struct {
 	Net              string
 }
 
-// DividendsBySecurityYearDataSourceRow contains raw values for the non-table security/year analysis.
-type DividendsBySecurityYearDataSourceRow = DividendsBySecurityYearSourceRow
-
 // DividendsByYearMonthSecuritySourceRow contains raw values used by the year/month/security dividend analysis.
 type DividendsByYearMonthSecuritySourceRow struct {
 	Year             string
@@ -45,6 +42,11 @@ type DividendsByYearMonthSecuritySourceRow struct {
 	Gross            string
 	AfterWithholding string
 	Net              string
+}
+
+type DividendAnalysisYearMonthPeriod struct {
+	Year  string
+	Month string
 }
 
 // ListDividendAnalysisRowsByDepotIDs returns dividend-entry values for the requested depots.
@@ -147,67 +149,6 @@ SELECT strftime('%Y', pay_date) AS year,
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate dividend analysis month rows: %w", err)
-	}
-
-	return out, nil
-}
-
-// ListDividendAnalysisSecurityYearRowsByDepotIDs returns dividend-entry values grouped later by security, year, and quantity.
-func (d *DB) ListDividendAnalysisSecurityYearRowsByDepotIDs(depotIDs []int64) ([]DividendsBySecurityYearSourceRow, error) {
-	if d == nil || d.SQL == nil {
-		return nil, fmt.Errorf("db not initialized")
-	}
-	if len(depotIDs) == 0 {
-		return []DividendsBySecurityYearSourceRow{}, nil
-	}
-
-	query := `
-SELECT security_id,
-       security_name,
-       security_isin,
-       strftime('%Y', pay_date) AS year,
-       pay_date,
-       quantity,
-       calc_gross_amount_base,
-       calc_after_withholding_amount_base,
-       payout_amount
-  FROM dividend_entries
- WHERE depot_id IN (` + sqlPlaceholders(len(depotIDs)) + `)
-   AND pay_date != ''
-   AND strftime('%Y', pay_date) IS NOT NULL
- ORDER BY security_name COLLATE NOCASE ASC, year ASC, pay_date ASC, id ASC;
-`
-	args := make([]any, 0, len(depotIDs))
-	for _, depotID := range depotIDs {
-		args = append(args, depotID)
-	}
-
-	rows, err := d.SQL.Query(query, args...)
-	if err != nil {
-		return nil, fmt.Errorf("list dividend analysis security year rows by depot ids: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]DividendsBySecurityYearSourceRow, 0)
-	for rows.Next() {
-		var row DividendsBySecurityYearSourceRow
-		if err := rows.Scan(
-			&row.SecurityID,
-			&row.SecurityName,
-			&row.SecurityISIN,
-			&row.Year,
-			&row.PayDate,
-			&row.Quantity,
-			&row.Gross,
-			&row.AfterWithholding,
-			&row.Net,
-		); err != nil {
-			return nil, fmt.Errorf("scan dividend analysis security year row: %w", err)
-		}
-		out = append(out, row)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate dividend analysis security year rows: %w", err)
 	}
 
 	return out, nil
@@ -337,6 +278,84 @@ SELECT strftime('%Y', pay_date) AS year,
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("iterate dividend analysis year month security rows: %w", err)
+	}
+
+	return out, nil
+}
+
+// ListDividendAnalysisYearMonthSecurityDataRowsByDepotIDs returns year/month/security
+// analysis rows filtered by depot, optionally security, and optionally exact periods.
+func (d *DB) ListDividendAnalysisYearMonthSecurityDataRowsByDepotIDs(depotIDs []int64, securityIDs []int64, periods []DividendAnalysisYearMonthPeriod) ([]DividendsByYearMonthSecuritySourceRow, error) {
+	if d == nil || d.SQL == nil {
+		return nil, fmt.Errorf("db not initialized")
+	}
+	if len(depotIDs) == 0 {
+		return []DividendsByYearMonthSecuritySourceRow{}, nil
+	}
+
+	query := `
+SELECT strftime('%Y', pay_date) AS year,
+       strftime('%m', pay_date) AS month,
+       security_id,
+       security_name,
+       security_isin,
+       calc_gross_amount_base,
+       calc_after_withholding_amount_base,
+       payout_amount
+  FROM dividend_entries
+ WHERE depot_id IN (` + sqlPlaceholders(len(depotIDs)) + `)
+   AND pay_date != ''
+   AND strftime('%Y', pay_date) IS NOT NULL
+   AND strftime('%m', pay_date) IS NOT NULL
+`
+	args := make([]any, 0, len(depotIDs)+len(securityIDs)+(len(periods)*2))
+	for _, depotID := range depotIDs {
+		args = append(args, depotID)
+	}
+	if len(securityIDs) > 0 {
+		query += "   AND security_id IN (" + sqlPlaceholders(len(securityIDs)) + ")\n"
+		for _, securityID := range securityIDs {
+			args = append(args, securityID)
+		}
+	}
+	if len(periods) > 0 {
+		query += "   AND ("
+		for i, period := range periods {
+			if i > 0 {
+				query += " OR "
+			}
+			query += "(strftime('%Y', pay_date) = ? AND strftime('%m', pay_date) = ?)"
+			args = append(args, period.Year, period.Month)
+		}
+		query += ")\n"
+	}
+	query += " ORDER BY year ASC, month ASC, security_name COLLATE NOCASE ASC, id ASC;\n"
+
+	rows, err := d.SQL.Query(query, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list dividend analysis year month security data rows by depot ids: %w", err)
+	}
+	defer func() { _ = rows.Close() }()
+
+	out := make([]DividendsByYearMonthSecuritySourceRow, 0)
+	for rows.Next() {
+		var row DividendsByYearMonthSecuritySourceRow
+		if err := rows.Scan(
+			&row.Year,
+			&row.Month,
+			&row.SecurityID,
+			&row.SecurityName,
+			&row.SecurityISIN,
+			&row.Gross,
+			&row.AfterWithholding,
+			&row.Net,
+		); err != nil {
+			return nil, fmt.Errorf("scan dividend analysis year month security data row: %w", err)
+		}
+		out = append(out, row)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate dividend analysis year month security data rows: %w", err)
 	}
 
 	return out, nil

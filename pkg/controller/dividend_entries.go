@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/shopspring/decimal"
 
@@ -185,6 +186,16 @@ type withholdingTaxRefundCalculation struct {
 	RefundPercent string
 	Source        string
 	Capped        bool
+}
+
+type dividendEntryTimeRangeResponseData struct {
+	FirstYear    int    `json:"FirstYear"`
+	FirstMonth   int    `json:"FirstMonth"`
+	LastYear     int    `json:"LastYear"`
+	LastMonth    int    `json:"LastMonth"`
+	CurrentYear  int    `json:"CurrentYear"`
+	CurrentMonth int    `json:"CurrentMonth"`
+	CurrentDate  string `json:"CurrentDate"`
 }
 
 // ensureAuthorized verifies database/session setup and requires an authenticated session.
@@ -1440,6 +1451,89 @@ func (ct DividendEntriesController) GetFirstYear(c *gin.Context) {
 		"success": true,
 		"message": "DIVIDEND_ENTRY_FIRST_YEAR_LOADED",
 		"year":    year,
+	})
+}
+
+// GetTimeRange handles GET /api/dividend-entries/time-range.
+func (ct DividendEntriesController) GetTimeRange(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	sessionUserID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	depotID, ok := parseOptionalDepotIDQueryForDividendEntries(c)
+	if !ok {
+		return
+	}
+
+	timeRange := db.DividendEntryTimeRange{}
+	if depotID > 0 {
+		allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:list", depotID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+			return
+		}
+
+		foundRange, found, err := ct.DB.GetDividendEntryTimeRangeByDepotID(depotID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if found {
+			timeRange = foundRange
+		}
+	} else {
+		allowed, err := ct.G.CanDoAny(sessionUserID, db.EntityTypeDepot, "entries:list")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
+
+		scope, err := ct.G.ScopeForAction(sessionUserID, db.EntityTypeDepot, "entries:list")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+
+		foundRange, found, err := ct.DB.GetAccessibleDividendEntryTimeRangeByUser(sessionUserID, scope.All, scope.Roles)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if found {
+			timeRange = foundRange
+		}
+	}
+
+	now := time.Now()
+	c.JSON(http.StatusOK, gin.H{
+		"success": true,
+		"message": "DIVIDEND_ENTRY_TIME_RANGE_LOADED",
+		"data": dividendEntryTimeRangeResponseData{
+			FirstYear:    timeRange.FirstYear,
+			FirstMonth:   timeRange.FirstMonth,
+			LastYear:     timeRange.LastYear,
+			LastMonth:    timeRange.LastMonth,
+			CurrentYear:  now.Year(),
+			CurrentMonth: int(now.Month()),
+			CurrentDate:  now.Format("2006-01-02"),
+		},
 	})
 }
 

@@ -283,3 +283,82 @@ func TestGetFirstAccessibleDividendEntryYearByUser(t *testing.T) {
 		t.Fatalf("GetFirstAccessibleDividendEntryYearByUser(no membership) found = true")
 	}
 }
+
+func TestGetDividendEntryTimeRangeByDepotID(t *testing.T) {
+	database := newDividendEntriesTestDB(t)
+
+	middle := validDividendEntryForDBTest(t, database)
+	middle.PayDate = "2024-05-15"
+	if err := database.CreateDividendEntry(&middle); err != nil {
+		t.Fatalf("CreateDividendEntry(middle) error = %v", err)
+	}
+
+	first := validDividendEntryForDBTest(t, database)
+	first.DepotID = middle.DepotID
+	first.PayDate = "2021-04-15"
+	if err := database.CreateDividendEntry(&first); err != nil {
+		t.Fatalf("CreateDividendEntry(first) error = %v", err)
+	}
+
+	last := validDividendEntryForDBTest(t, database)
+	last.DepotID = middle.DepotID
+	last.PayDate = "2026-11-15"
+	if err := database.CreateDividendEntry(&last); err != nil {
+		t.Fatalf("CreateDividendEntry(last) error = %v", err)
+	}
+
+	timeRange, found, err := database.GetDividendEntryTimeRangeByDepotID(middle.DepotID)
+	if err != nil {
+		t.Fatalf("GetDividendEntryTimeRangeByDepotID() error = %v", err)
+	}
+	if !found {
+		t.Fatalf("GetDividendEntryTimeRangeByDepotID() found = false")
+	}
+	if timeRange.FirstYear != 2021 || timeRange.FirstMonth != 4 || timeRange.LastYear != 2026 || timeRange.LastMonth != 11 {
+		t.Fatalf("GetDividendEntryTimeRangeByDepotID() = %+v, want 2021/4 to 2026/11", timeRange)
+	}
+}
+
+func TestGetAccessibleDividendEntryTimeRangeByUser(t *testing.T) {
+	database := newDividendEntriesTestDB(t)
+	userID, err := database.CreateUser(context.Background(), User{
+		Password:  "secret",
+		FirstName: "Range",
+		LastName:  "Tester",
+		Email:     "range-tester@example.com",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	first := validDividendEntryForDBTest(t, database)
+	first.PayDate = "2020-02-15"
+	if err := database.CreateDividendEntry(&first); err != nil {
+		t.Fatalf("CreateDividendEntry(first) error = %v", err)
+	}
+	last := validDividendEntryForDBTest(t, database)
+	last.DepotID = first.DepotID
+	last.PayDate = "2023-09-15"
+	if err := database.CreateDividendEntry(&last); err != nil {
+		t.Fatalf("CreateDividendEntry(last) error = %v", err)
+	}
+	if err := database.GrantMembership(&Membership{
+		EntityType: EntityTypeDepot,
+		EntityID:   first.DepotID,
+		UserID:     userID,
+		Role:       RoleDepotViewer,
+	}); err != nil {
+		t.Fatalf("GrantMembership() error = %v", err)
+	}
+
+	timeRange, found, err := database.GetAccessibleDividendEntryTimeRangeByUser(userID, false, []string{RoleDepotViewer})
+	if err != nil {
+		t.Fatalf("GetAccessibleDividendEntryTimeRangeByUser() error = %v", err)
+	}
+	if !found {
+		t.Fatalf("GetAccessibleDividendEntryTimeRangeByUser() found = false")
+	}
+	if timeRange.FirstYear != 2020 || timeRange.FirstMonth != 2 || timeRange.LastYear != 2023 || timeRange.LastMonth != 9 {
+		t.Fatalf("GetAccessibleDividendEntryTimeRangeByUser() = %+v, want 2020/2 to 2023/9", timeRange)
+	}
+}

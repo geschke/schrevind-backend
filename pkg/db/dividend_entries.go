@@ -73,6 +73,13 @@ type DividendEntryListFilters struct {
 	DepotID  int64
 }
 
+type DividendEntryTimeRange struct {
+	FirstYear  int
+	FirstMonth int
+	LastYear   int
+	LastMonth  int
+}
+
 func EncodeInlandTaxDetails(details []InlandTaxDetail) (string, error) {
 	if len(details) == 0 {
 		return "[]", nil
@@ -629,6 +636,56 @@ func dividendEntryYearFromPayDate(payDate string) (int, error) {
 	return year, nil
 }
 
+func dividendEntryYearMonthFromPayDate(payDate string) (int, int, error) {
+	payDate = strings.TrimSpace(payDate)
+	if len(payDate) < 7 {
+		return 0, 0, fmt.Errorf("invalid pay_date")
+	}
+	year, err := strconv.Atoi(payDate[:4])
+	if err != nil || year <= 0 {
+		return 0, 0, fmt.Errorf("invalid pay_date")
+	}
+	month, err := strconv.Atoi(payDate[5:7])
+	if err != nil || month < 1 || month > 12 {
+		return 0, 0, fmt.Errorf("invalid pay_date")
+	}
+	return year, month, nil
+}
+
+func dividendEntryTimeRangeFromPayDates(firstPayDate, lastPayDate string) (DividendEntryTimeRange, error) {
+	firstYear, firstMonth, err := dividendEntryYearMonthFromPayDate(firstPayDate)
+	if err != nil {
+		return DividendEntryTimeRange{}, err
+	}
+	lastYear, lastMonth, err := dividendEntryYearMonthFromPayDate(lastPayDate)
+	if err != nil {
+		return DividendEntryTimeRange{}, err
+	}
+	return DividendEntryTimeRange{
+		FirstYear:  firstYear,
+		FirstMonth: firstMonth,
+		LastYear:   lastYear,
+		LastMonth:  lastMonth,
+	}, nil
+}
+
+func scanDividendEntryTimeRange(row *sql.Row) (DividendEntryTimeRange, bool, error) {
+	var firstPayDate sql.NullString
+	var lastPayDate sql.NullString
+	if err := row.Scan(&firstPayDate, &lastPayDate); err != nil {
+		return DividendEntryTimeRange{}, false, err
+	}
+	if !firstPayDate.Valid || !lastPayDate.Valid {
+		return DividendEntryTimeRange{}, false, nil
+	}
+
+	timeRange, err := dividendEntryTimeRangeFromPayDates(firstPayDate.String, lastPayDate.String)
+	if err != nil {
+		return DividendEntryTimeRange{}, false, err
+	}
+	return timeRange, true, nil
+}
+
 // GetFirstDividendEntryYearByDepotID returns the first pay-date year for one depot.
 func (d *DB) GetFirstDividendEntryYearByDepotID(depotID int64) (int, bool, error) {
 	if d == nil || d.SQL == nil {
@@ -659,6 +716,27 @@ SELECT de.pay_date
 		return 0, false, fmt.Errorf("get first dividend entry year by depot: %w", err)
 	}
 	return year, true, nil
+}
+
+// GetDividendEntryTimeRangeByDepotID returns the first and last pay-date range for one depot.
+func (d *DB) GetDividendEntryTimeRangeByDepotID(depotID int64) (DividendEntryTimeRange, bool, error) {
+	if d == nil || d.SQL == nil {
+		return DividendEntryTimeRange{}, false, fmt.Errorf("db not initialized")
+	}
+	if depotID <= 0 {
+		return DividendEntryTimeRange{}, false, fmt.Errorf("depotID must be > 0")
+	}
+
+	timeRange, found, err := scanDividendEntryTimeRange(d.SQL.QueryRow(`
+SELECT MIN(de.pay_date), MAX(de.pay_date)
+  FROM dividend_entries de
+ WHERE de.depot_id = ?
+   AND TRIM(de.pay_date) <> '';
+`, depotID))
+	if err != nil {
+		return DividendEntryTimeRange{}, false, fmt.Errorf("get dividend entry time range by depot: %w", err)
+	}
+	return timeRange, found, nil
 }
 
 // GetFirstAccessibleDividendEntryYearByUser returns the first pay-date year for entries
@@ -707,6 +785,44 @@ SELECT de.pay_date
 		return 0, false, fmt.Errorf("get first accessible dividend entry year by user: %w", err)
 	}
 	return year, true, nil
+}
+
+// GetAccessibleDividendEntryTimeRangeByUser returns the first and last pay-date range
+// for entries accessible to the user for the requested action scope.
+func (d *DB) GetAccessibleDividendEntryTimeRangeByUser(userID int64, all bool, roles []string) (DividendEntryTimeRange, bool, error) {
+	if d == nil || d.SQL == nil {
+		return DividendEntryTimeRange{}, false, fmt.Errorf("db not initialized")
+	}
+	if userID <= 0 {
+		return DividendEntryTimeRange{}, false, fmt.Errorf("userID must be > 0")
+	}
+
+	query := ""
+	args := make([]any, 0, 2+len(roles))
+	if all {
+		query = `
+SELECT MIN(de.pay_date), MAX(de.pay_date)
+  FROM dividend_entries de
+ WHERE TRIM(de.pay_date) <> ''
+`
+	} else {
+		query = `
+SELECT MIN(de.pay_date), MAX(de.pay_date)
+  FROM dividend_entries de
+  JOIN memberships m ON m.entity_type = ? AND m.entity_id = de.depot_id
+ WHERE m.user_id = ?
+   AND TRIM(de.pay_date) <> ''
+`
+		args = append(args, EntityTypeDepot, userID)
+		query, args = appendDividendEntryRolesFilter(query, args, roles)
+	}
+	query += ";"
+
+	timeRange, found, err := scanDividendEntryTimeRange(d.SQL.QueryRow(query, args...))
+	if err != nil {
+		return DividendEntryTimeRange{}, false, fmt.Errorf("get accessible dividend entry time range by user: %w", err)
+	}
+	return timeRange, found, nil
 }
 
 // ListAccessibleDividendEntriesByUser returns a filtered and paginated list of dividend
