@@ -624,18 +624,6 @@ func appendDividendEntryRolesFilter(query string, args []any, roles []string) (s
 	return query, args
 }
 
-func dividendEntryYearFromPayDate(payDate string) (int, error) {
-	payDate = strings.TrimSpace(payDate)
-	if len(payDate) < 4 {
-		return 0, fmt.Errorf("invalid pay_date")
-	}
-	year, err := strconv.Atoi(payDate[:4])
-	if err != nil || year <= 0 {
-		return 0, fmt.Errorf("invalid pay_date")
-	}
-	return year, nil
-}
-
 func dividendEntryYearMonthFromPayDate(payDate string) (int, int, error) {
 	payDate = strings.TrimSpace(payDate)
 	if len(payDate) < 7 {
@@ -686,38 +674,6 @@ func scanDividendEntryTimeRange(row *sql.Row) (DividendEntryTimeRange, bool, err
 	return timeRange, true, nil
 }
 
-// GetFirstDividendEntryYearByDepotID returns the first pay-date year for one depot.
-func (d *DB) GetFirstDividendEntryYearByDepotID(depotID int64) (int, bool, error) {
-	if d == nil || d.SQL == nil {
-		return 0, false, fmt.Errorf("db not initialized")
-	}
-	if depotID <= 0 {
-		return 0, false, fmt.Errorf("depotID must be > 0")
-	}
-
-	var payDate string
-	err := d.SQL.QueryRow(`
-SELECT de.pay_date
-  FROM dividend_entries de
- WHERE de.depot_id = ?
-   AND TRIM(de.pay_date) <> ''
- ORDER BY de.pay_date ASC, de.id ASC
- LIMIT 1;
-`, depotID).Scan(&payDate)
-	if err == sql.ErrNoRows {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, fmt.Errorf("get first dividend entry year by depot: %w", err)
-	}
-
-	year, err := dividendEntryYearFromPayDate(payDate)
-	if err != nil {
-		return 0, false, fmt.Errorf("get first dividend entry year by depot: %w", err)
-	}
-	return year, true, nil
-}
-
 // GetDividendEntryTimeRangeByDepotID returns the first and last pay-date range for one depot.
 func (d *DB) GetDividendEntryTimeRangeByDepotID(depotID int64) (DividendEntryTimeRange, bool, error) {
 	if d == nil || d.SQL == nil {
@@ -737,54 +693,6 @@ SELECT MIN(de.pay_date), MAX(de.pay_date)
 		return DividendEntryTimeRange{}, false, fmt.Errorf("get dividend entry time range by depot: %w", err)
 	}
 	return timeRange, found, nil
-}
-
-// GetFirstAccessibleDividendEntryYearByUser returns the first pay-date year for entries
-// accessible to the user for the requested action scope.
-func (d *DB) GetFirstAccessibleDividendEntryYearByUser(userID int64, all bool, roles []string) (int, bool, error) {
-	if d == nil || d.SQL == nil {
-		return 0, false, fmt.Errorf("db not initialized")
-	}
-	if userID <= 0 {
-		return 0, false, fmt.Errorf("userID must be > 0")
-	}
-
-	query := ""
-	args := make([]any, 0, 2+len(roles))
-	if all {
-		query = `
-SELECT de.pay_date
-  FROM dividend_entries de
- WHERE TRIM(de.pay_date) <> ''
-`
-	} else {
-		query = `
-SELECT de.pay_date
-  FROM dividend_entries de
-  JOIN memberships m ON m.entity_type = ? AND m.entity_id = de.depot_id
- WHERE m.user_id = ?
-   AND TRIM(de.pay_date) <> ''
-`
-		args = append(args, EntityTypeDepot, userID)
-		query, args = appendDividendEntryRolesFilter(query, args, roles)
-	}
-	query += " ORDER BY de.pay_date ASC, de.id ASC\n"
-	query += " LIMIT 1;"
-
-	var payDate string
-	err := d.SQL.QueryRow(query, args...).Scan(&payDate)
-	if err == sql.ErrNoRows {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, false, fmt.Errorf("get first accessible dividend entry year by user: %w", err)
-	}
-
-	year, err := dividendEntryYearFromPayDate(payDate)
-	if err != nil {
-		return 0, false, fmt.Errorf("get first accessible dividend entry year by user: %w", err)
-	}
-	return year, true, nil
 }
 
 // GetAccessibleDividendEntryTimeRangeByUser returns the first and last pay-date range
