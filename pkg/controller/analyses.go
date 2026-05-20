@@ -132,6 +132,27 @@ type YearDataRow struct {
 	Net              string `json:"Net"`
 }
 
+type YearMonthDataResponse struct {
+	Success bool                      `json:"success"`
+	Message string                    `json:"message"`
+	Data    YearMonthDataResponseData `json:"data"`
+}
+
+type YearMonthDataResponseData struct {
+	Currency string             `json:"Currency"`
+	Rows     []YearMonthDataRow `json:"Rows"`
+}
+
+type YearMonthDataRow struct {
+	Level            string `json:"Level"`
+	Year             string `json:"Year"`
+	Month            string `json:"Month"`
+	Period           string `json:"Period"`
+	Gross            string `json:"Gross"`
+	AfterWithholding string `json:"AfterWithholding"`
+	Net              string `json:"Net"`
+}
+
 type yearMonthSecurityDataRequest struct {
 	ContextGroupID int64                     `json:"ContextGroupID"`
 	DepotIDs       []int64                   `json:"DepotIDs"`
@@ -441,6 +462,138 @@ func (ct AnalysesController) GetDividendsByYearData(c *gin.Context) {
 		Message: "ANALYSIS_OK",
 		Data:    data,
 	})
+}
+
+// GetDividendsByYearMonthData handles GET /api/analyses/dividends-by-year-month-data.
+func (ct AnalysesController) GetDividendsByYearMonthData(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	groupID, ok := parseAnalysisContextGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
+		return
+	}
+
+	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, err := ct.DB.ListDepotsForActionScope(userID, scope.All, scope.Roles)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, ok, statusCode, message := filterDepotsByQuery(c, depots)
+	if !ok {
+		c.JSON(statusCode, gin.H{"success": false, "message": message})
+		return
+	}
+
+	if len(depots) == 0 {
+		c.JSON(http.StatusOK, YearMonthDataResponse{
+			Success: true,
+			Message: "ANALYSIS_OK",
+			Data: YearMonthDataResponseData{
+				Currency: "",
+				Rows:     []YearMonthDataRow{},
+			},
+		})
+		return
+	}
+
+	baseCurrency, ok, currencies := uniqueDepotBaseCurrency(depots)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "ANALYSIS_MULTIPLE_BASE_CURRENCIES",
+			"currencies": currencies,
+		})
+		return
+	}
+
+	decimalPlaces, ok := ct.loadDecimalPlacesForBaseCurrency(groupID, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depotIDs := make([]int64, 0, len(depots))
+	for _, depot := range depots {
+		depotIDs = append(depotIDs, depot.ID)
+	}
+
+	sourceRows, err := ct.DB.ListDividendAnalysisMonthRowsByDepotIDs(depotIDs)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	years, ok := parseYearsQuery(c)
+	if !ok {
+		return
+	}
+
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	data, ok := buildDividendsByYearMonthData(sourceRows, decimalPlaces, baseCurrency, locale, years)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "ANALYSIS_INVALID_DECIMAL_VALUE"})
+		return
+	}
+
+	c.JSON(http.StatusOK, YearMonthDataResponse{
+		Success: true,
+		Message: "ANALYSIS_OK",
+		Data:    data,
+	})
+}
+
+func parseYearsQuery(c *gin.Context) ([]string, bool) {
+	years := c.QueryArray("year")
+	for _, year := range years {
+		if len(year) != 4 {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_YEAR_FORMAT"})
+			return nil, false
+		}
+		if _, err := strconv.Atoi(year); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_YEAR_FORMAT"})
+			return nil, false
+		}
+	}
+	return years, true
 }
 
 // GetDividendsByYearMonth handles GET /api/analyses/dividends-by-year-month.
@@ -1536,6 +1689,91 @@ func buildYearMonthSecurityDataSummaryRow(totals dividendsByYearTotals, decimalP
 		AfterWithholding: displayformat.DecimalForLocale(totals.AfterWithholding.StringFixed(decimalPlaces), locale),
 		Net:              displayformat.DecimalForLocale(totals.Net.StringFixed(decimalPlaces), locale),
 		Type:             "summary",
+	}
+}
+
+func buildDividendsByYearMonthData(sourceRows []db.DividendsByYearMonthSourceRow, decimalPlaces int32, currency, locale string, filterYears []string) (YearMonthDataResponseData, bool) {
+	var filterMap map[string]struct{}
+	if len(filterYears) > 0 {
+		filterMap = make(map[string]struct{}, len(filterYears))
+		for _, y := range filterYears {
+			filterMap[y] = struct{}{}
+		}
+	}
+
+	yearTotals := make(map[string]dividendsByYearMonthTotals)
+	monthTotals := make(map[string]map[string]dividendsByYearMonthTotals)
+
+	for _, sourceRow := range sourceRows {
+		if filterMap != nil {
+			if _, ok := filterMap[sourceRow.Year]; !ok {
+				continue
+			}
+		}
+
+		gross, err := decimal.NewFromString(sourceRow.Gross)
+		if err != nil {
+			return YearMonthDataResponseData{}, false
+		}
+		afterWithholding, err := decimal.NewFromString(sourceRow.AfterWithholding)
+		if err != nil {
+			return YearMonthDataResponseData{}, false
+		}
+		net, err := decimal.NewFromString(sourceRow.Net)
+		if err != nil {
+			return YearMonthDataResponseData{}, false
+		}
+
+		yearTotal := yearTotals[sourceRow.Year]
+		yearTotal.Gross = yearTotal.Gross.Add(gross)
+		yearTotal.AfterWithholding = yearTotal.AfterWithholding.Add(afterWithholding)
+		yearTotal.Net = yearTotal.Net.Add(net)
+		yearTotals[sourceRow.Year] = yearTotal
+
+		if monthTotals[sourceRow.Year] == nil {
+			monthTotals[sourceRow.Year] = make(map[string]dividendsByYearMonthTotals)
+		}
+		monthTotal := monthTotals[sourceRow.Year][sourceRow.Month]
+		monthTotal.Gross = monthTotal.Gross.Add(gross)
+		monthTotal.AfterWithholding = monthTotal.AfterWithholding.Add(afterWithholding)
+		monthTotal.Net = monthTotal.Net.Add(net)
+		monthTotals[sourceRow.Year][sourceRow.Month] = monthTotal
+	}
+
+	years := make([]string, 0, len(yearTotals))
+	for year := range yearTotals {
+		years = append(years, year)
+	}
+	sort.Strings(years)
+
+	rows := make([]YearMonthDataRow, 0, len(years)*13)
+	for _, year := range years {
+		rows = append(rows, buildYearMonthDataRow("year", year, "", year, yearTotals[year], decimalPlaces, locale))
+		for month := 1; month <= 12; month++ {
+			monthKey := twoDigitMonth(month)
+			rows = append(rows, buildYearMonthDataRow("month", year, monthKey, monthKey, monthTotals[year][monthKey], decimalPlaces, locale))
+		}
+	}
+
+	return YearMonthDataResponseData{
+		Currency: currency,
+		Rows:     rows,
+	}, true
+}
+
+func buildYearMonthDataRow(level, year, month, period string, totals dividendsByYearMonthTotals, decimalPlaces int32, locale string) YearMonthDataRow {
+	gross := totals.Gross.StringFixed(decimalPlaces)
+	afterWithholding := totals.AfterWithholding.StringFixed(decimalPlaces)
+	net := totals.Net.StringFixed(decimalPlaces)
+
+	return YearMonthDataRow{
+		Level:            level,
+		Year:             year,
+		Month:            month,
+		Period:           period,
+		Gross:            displayformat.DecimalForLocale(gross, locale),
+		AfterWithholding: displayformat.DecimalForLocale(afterWithholding, locale),
+		Net:              displayformat.DecimalForLocale(net, locale),
 	}
 }
 

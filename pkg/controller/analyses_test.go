@@ -163,6 +163,88 @@ func assertYearDataRow(t *testing.T, row YearDataRow, year, gross, afterWithhold
 	}
 }
 
+func TestBuildDividendsByYearMonthData(t *testing.T) {
+	data, ok := buildDividendsByYearMonthData([]db.DividendsByYearMonthSourceRow{
+		{Year: "2022", Month: "05", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},
+		{Year: "2021", Month: "12", Gross: "50.00", AfterWithholding: "40.00", Net: "35.00"},
+		{Year: "2022", Month: "05", Gross: "25.50", AfterWithholding: "20.25", Net: "19.25"},
+	}, 2, "EUR", "en-US", nil)
+	if !ok {
+		t.Fatalf("buildDividendsByYearMonthData() ok = false, want true")
+	}
+	if data.Currency != "EUR" {
+		t.Fatalf("buildDividendsByYearMonthData() currency = %q, want EUR", data.Currency)
+	}
+
+	// 2021 year row + 12 month rows = 13 rows
+	// 2022 year row + 12 month rows = 13 rows
+	// Total 26 rows
+	if len(data.Rows) != 26 {
+		t.Fatalf("buildDividendsByYearMonthData() len = %d, want 26", len(data.Rows))
+	}
+
+	// Verify 2021 year row
+	assertYearMonthDataRow(t, data.Rows[0], "year", "2021", "", "2021", "50.00", "40.00", "35.00")
+	// Verify 2021-12
+	assertYearMonthDataRow(t, data.Rows[12], "month", "2021", "12", "12", "50.00", "40.00", "35.00")
+
+	// Verify 2022 year row
+	assertYearMonthDataRow(t, data.Rows[13], "year", "2022", "", "2022", "125.50", "100.25", "94.25")
+	// Verify 2022-05
+	assertYearMonthDataRow(t, data.Rows[18], "month", "2022", "05", "05", "125.50", "100.25", "94.25")
+}
+
+func TestBuildDividendsByYearMonthDataWithFilter(t *testing.T) {
+	data, ok := buildDividendsByYearMonthData([]db.DividendsByYearMonthSourceRow{
+		{Year: "2022", Month: "05", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},
+		{Year: "2021", Month: "12", Gross: "50.00", AfterWithholding: "40.00", Net: "35.00"},
+	}, 2, "EUR", "en-US", []string{"2022"})
+	if !ok {
+		t.Fatalf("buildDividendsByYearMonthData() ok = false, want true")
+	}
+	// Only 2022 (1 year row + 12 month rows = 13 rows)
+	if len(data.Rows) != 13 {
+		t.Fatalf("buildDividendsByYearMonthData() len = %d, want 13", len(data.Rows))
+	}
+	assertYearMonthDataRow(t, data.Rows[0], "year", "2022", "", "2022", "100.00", "80.00", "75.00")
+}
+
+func TestBuildDividendsByYearMonthDataFormatsLocale(t *testing.T) {
+	data, ok := buildDividendsByYearMonthData([]db.DividendsByYearMonthSourceRow{
+		{Year: "2022", Month: "05", Gross: "100.50", AfterWithholding: "80.20", Net: "75.10"},
+	}, 2, "EUR", "de-DE", nil)
+	if !ok {
+		t.Fatalf("buildDividendsByYearMonthData() ok = false, want true")
+	}
+	// Verify 2022 year row formatting
+	assertYearMonthDataRow(t, data.Rows[0], "year", "2022", "", "2022", "100,50", "80,20", "75,10")
+}
+
+func assertYearMonthDataRow(t *testing.T, row YearMonthDataRow, level, year, month, period, gross, afterWithholding, net string) {
+	t.Helper()
+	if row.Level != level {
+		t.Fatalf("row Level = %q, want %q", row.Level, level)
+	}
+	if row.Year != year {
+		t.Fatalf("row Year = %q, want %q", row.Year, year)
+	}
+	if row.Month != month {
+		t.Fatalf("row Month = %q, want %q", row.Month, month)
+	}
+	if row.Period != period {
+		t.Fatalf("row Period = %q, want %q", row.Period, period)
+	}
+	if row.Gross != gross {
+		t.Fatalf("row Gross = %q, want %q", row.Gross, gross)
+	}
+	if row.AfterWithholding != afterWithholding {
+		t.Fatalf("row AfterWithholding = %q, want %q", row.AfterWithholding, afterWithholding)
+	}
+	if row.Net != net {
+		t.Fatalf("row Net = %q, want %q", row.Net, net)
+	}
+}
+
 func TestBuildDividendsByYearChartData(t *testing.T) {
 	data, ok := buildDividendsByYearChartData([]db.DividendsByYearSourceRow{
 		{Year: "2022", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},

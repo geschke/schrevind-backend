@@ -153,6 +153,8 @@ func Start(database *db.DB) error {
 		analysesCtl := controller.NewAnalysesController(database, store, sessionName, g)
 		router.GET("/api/analyses/dividends-by-year-data", analysesCtl.GetDividendsByYearData)
 		router.OPTIONS("/api/analyses/dividends-by-year-data", analysesCtl.Options)
+		router.GET("/api/analyses/dividends-by-year-month-data", analysesCtl.GetDividendsByYearMonthData)
+		router.OPTIONS("/api/analyses/dividends-by-year-month-data", analysesCtl.Options)
 		router.GET("/api/analyses/dividends-by-year-month", analysesCtl.GetDividendsByYearMonth)
 		router.OPTIONS("/api/analyses/dividends-by-year-month", analysesCtl.Options)
 		router.GET("/api/analyses/dividends-by-security-year-data", analysesCtl.GetDividendsBySecurityYearData)
