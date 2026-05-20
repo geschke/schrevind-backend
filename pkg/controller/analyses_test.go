@@ -144,6 +144,65 @@ func TestBuildDividendsByYearRowsFormatsLocale(t *testing.T) {
 	assertAnalysisRow(t, rows[0], "2022", "100,00", "80,00", "75,50")
 }
 
+func TestBuildDividendsByYearData(t *testing.T) {
+	data, ok := buildDividendsByYearData([]db.DividendsByYearSourceRow{
+		{Year: "2022", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},
+		{Year: "2021", Gross: "50.00", AfterWithholding: "40.00", Net: "35.00"},
+		{Year: "2022", Gross: "25.50", AfterWithholding: "20.25", Net: "19.25"},
+	}, 2, "EUR", "en-US")
+	if !ok {
+		t.Fatalf("buildDividendsByYearData() ok = false, want true")
+	}
+	if data.Currency != "EUR" {
+		t.Fatalf("buildDividendsByYearData() currency = %q, want EUR", data.Currency)
+	}
+	if len(data.Rows) != 2 {
+		t.Fatalf("buildDividendsByYearData() len = %d, want 2", len(data.Rows))
+	}
+
+	assertYearDataRow(t, data.Rows[0], "2021", "50.00", "40.00", "35.00")
+	assertYearDataRow(t, data.Rows[1], "2022", "125.50", "100.25", "94.25")
+}
+
+func TestBuildDividendsByYearDataRejectsInvalidDecimal(t *testing.T) {
+	_, ok := buildDividendsByYearData([]db.DividendsByYearSourceRow{
+		{Year: "2022", Gross: "bad", AfterWithholding: "80.00", Net: "75.00"},
+	}, 2, "EUR", "en-US")
+	if ok {
+		t.Fatalf("buildDividendsByYearData() ok = true, want false")
+	}
+}
+
+func TestBuildDividendsByYearDataFormatsLocale(t *testing.T) {
+	data, ok := buildDividendsByYearData([]db.DividendsByYearSourceRow{
+		{Year: "2022", Gross: "100.00", AfterWithholding: "80.00", Net: "75.50"},
+	}, 2, "EUR", "de-DE")
+	if !ok {
+		t.Fatalf("buildDividendsByYearData() ok = false, want true")
+	}
+	if len(data.Rows) != 1 {
+		t.Fatalf("buildDividendsByYearData() len = %d, want 1", len(data.Rows))
+	}
+
+	assertYearDataRow(t, data.Rows[0], "2022", "100,00", "80,00", "75,50")
+}
+
+func assertYearDataRow(t *testing.T, row YearDataRow, year, gross, afterWithholding, net string) {
+	t.Helper()
+	if row.Year != year {
+		t.Fatalf("row Year = %q, want %q", row.Year, year)
+	}
+	if row.Gross != gross {
+		t.Fatalf("row Gross = %q, want %q", row.Gross, gross)
+	}
+	if row.AfterWithholding != afterWithholding {
+		t.Fatalf("row AfterWithholding = %q, want %q", row.AfterWithholding, afterWithholding)
+	}
+	if row.Net != net {
+		t.Fatalf("row Net = %q, want %q", row.Net, net)
+	}
+}
+
 func TestBuildDividendsByYearChartData(t *testing.T) {
 	data, ok := buildDividendsByYearChartData([]db.DividendsByYearSourceRow{
 		{Year: "2022", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},
