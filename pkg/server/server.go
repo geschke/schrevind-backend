@@ -151,8 +151,6 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/exports/get/:filename", exportsCtl.Options)
 
 		analysesCtl := controller.NewAnalysesController(database, store, sessionName, g)
-		router.GET("/api/analyses/dividends-by-year", analysesCtl.GetDividendsByYear)
-		router.OPTIONS("/api/analyses/dividends-by-year", analysesCtl.Options)
 		router.GET("/api/analyses/dividends-by-year-data", analysesCtl.GetDividendsByYearData)
 		router.OPTIONS("/api/analyses/dividends-by-year-data", analysesCtl.Options)
 		router.GET("/api/analyses/dividends-by-year-month", analysesCtl.GetDividendsByYearMonth)

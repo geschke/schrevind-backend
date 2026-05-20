@@ -343,106 +343,6 @@ func (ct AnalysesController) ensureAnalysisGroupMember(c *gin.Context, userID, g
 	return true
 }
 
-// GetDividendsByYear handles GET /api/analyses/dividends-by-year.
-func (ct AnalysesController) GetDividendsByYear(c *gin.Context) {
-	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
-		return
-	}
-	if !ct.ensureAuthorized(c) {
-		return
-	}
-
-	userID, ok := ct.currentSessionUserID(c)
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
-		return
-	}
-	groupID, ok := parseAnalysisContextGroupID(c)
-	if !ok {
-		return
-	}
-	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
-		return
-	}
-
-	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-
-	depots, err := ct.DB.ListDepotsForActionScope(userID, scope.All, scope.Roles)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-
-	baseCurrency, ok, currencies := uniqueDepotBaseCurrency(depots)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{
-			"success":    false,
-			"message":    "ANALYSIS_MULTIPLE_BASE_CURRENCIES",
-			"currencies": currencies,
-		})
-		return
-	}
-
-	decimalPlaces, ok := ct.loadDecimalPlacesForBaseCurrency(groupID, baseCurrency)
-	if !ok {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-
-	depotIDs := make([]int64, 0, len(depots))
-	for _, depot := range depots {
-		depotIDs = append(depotIDs, depot.ID)
-	}
-
-	sourceRows, err := ct.DB.ListDividendAnalysisRowsByDepotIDs(depotIDs)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-
-	locale, ok, err := ct.currentSessionUserLocale(c)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !ok {
-		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
-		return
-	}
-
-	rows, ok := buildDividendsByYearRows(sourceRows, decimalPlaces, locale)
-	if !ok {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "ANALYSIS_INVALID_DECIMAL_VALUE"})
-		return
-	}
-
-	c.JSON(http.StatusOK, AnalysisResponse{
-		Success: true,
-		Message: "ANALYSIS_OK",
-		Data: AnalysisData{
-			ID:       "dividends_by_year",
-			TitleKey: "analyses.dividends_by_year.title",
-			Type:     "table",
-			Columns:  dividendsByYearColumns(baseCurrency),
-			Rows:     rows,
-		},
-	})
-}
-
 // GetDividendsByYearData handles GET /api/analyses/dividends-by-year-data.
 func (ct AnalysesController) GetDividendsByYearData(c *gin.Context) {
 	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
@@ -1212,52 +1112,6 @@ func uniqueDepotBaseCurrency(depots []db.Depot) (string, bool, []string) {
 	return currencies[0], true, currencies
 }
 
-func buildDividendsByYearRows(sourceRows []db.DividendsByYearSourceRow, decimalPlaces int32, locale string) ([]AnalysisRow, bool) {
-	totalsByYear := make(map[string]dividendsByYearTotals)
-	for _, sourceRow := range sourceRows {
-		gross, err := decimal.NewFromString(sourceRow.Gross)
-		if err != nil {
-			return nil, false
-		}
-		afterWithholding, err := decimal.NewFromString(sourceRow.AfterWithholding)
-		if err != nil {
-			return nil, false
-		}
-		net, err := decimal.NewFromString(sourceRow.Net)
-		if err != nil {
-			return nil, false
-		}
-
-		totals := totalsByYear[sourceRow.Year]
-		totals.Gross = totals.Gross.Add(gross)
-		totals.AfterWithholding = totals.AfterWithholding.Add(afterWithholding)
-		totals.Net = totals.Net.Add(net)
-		totalsByYear[sourceRow.Year] = totals
-	}
-
-	years := make([]string, 0, len(totalsByYear))
-	for year := range totalsByYear {
-		years = append(years, year)
-	}
-	sort.Strings(years)
-
-	rows := make([]AnalysisRow, 0, len(years))
-	for _, year := range years {
-		totals := totalsByYear[year]
-		gross := totals.Gross.StringFixed(decimalPlaces)
-		afterWithholding := totals.AfterWithholding.StringFixed(decimalPlaces)
-		net := totals.Net.StringFixed(decimalPlaces)
-		rows = append(rows, AnalysisRow{
-			"year":              year,
-			"gross":             displayformat.DecimalForLocale(gross, locale),
-			"after_withholding": displayformat.DecimalForLocale(afterWithholding, locale),
-			"net":               displayformat.DecimalForLocale(net, locale),
-		})
-	}
-
-	return rows, true
-}
-
 func buildDividendsByYearData(sourceRows []db.DividendsByYearSourceRow, decimalPlaces int32, currency, locale string) (YearDataResponseData, bool) {
 	totalsByYear := make(map[string]dividendsByYearTotals)
 	for _, sourceRow := range sourceRows {
@@ -1755,38 +1609,6 @@ func buildDividendsByYearMonthAnalysisRow(level, year, month, period string, tot
 
 func twoDigitMonth(month int) string {
 	return fmt.Sprintf("%02d", month)
-}
-
-func dividendsByYearColumns(currency string) []AnalysisColumn {
-	return []AnalysisColumn{
-		{
-			Key:      "year",
-			LabelKey: "analyses.common.year",
-			Datatype: "string",
-			Align:    "left",
-		},
-		{
-			Key:      "gross",
-			LabelKey: "analyses.dividends_by_year.columns.gross",
-			Datatype: "currency",
-			Currency: currency,
-			Align:    "right",
-		},
-		{
-			Key:      "after_withholding",
-			LabelKey: "analyses.dividends_by_year.columns.after_withholding",
-			Datatype: "currency",
-			Currency: currency,
-			Align:    "right",
-		},
-		{
-			Key:      "net",
-			LabelKey: "analyses.dividends_by_year.columns.net",
-			Datatype: "currency",
-			Currency: currency,
-			Align:    "right",
-		},
-	}
 }
 
 func dividendsByYearMonthColumns(currency string) []AnalysisColumn {

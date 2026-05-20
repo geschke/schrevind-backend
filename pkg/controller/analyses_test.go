@@ -104,46 +104,6 @@ func TestFilterDepotsByRequestedIDsRejectsInaccessibleDepot(t *testing.T) {
 	}
 }
 
-func TestBuildDividendsByYearRows(t *testing.T) {
-	rows, ok := buildDividendsByYearRows([]db.DividendsByYearSourceRow{
-		{Year: "2022", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},
-		{Year: "2021", Gross: "50.00", AfterWithholding: "40.00", Net: "35.00"},
-		{Year: "2022", Gross: "25.50", AfterWithholding: "20.25", Net: "19.25"},
-	}, 2, "en-US")
-	if !ok {
-		t.Fatalf("buildDividendsByYearRows() ok = false, want true")
-	}
-	if len(rows) != 2 {
-		t.Fatalf("buildDividendsByYearRows() len = %d, want 2", len(rows))
-	}
-
-	assertAnalysisRow(t, rows[0], "2021", "50.00", "40.00", "35.00")
-	assertAnalysisRow(t, rows[1], "2022", "125.50", "100.25", "94.25")
-}
-
-func TestBuildDividendsByYearRowsRejectsInvalidDecimal(t *testing.T) {
-	_, ok := buildDividendsByYearRows([]db.DividendsByYearSourceRow{
-		{Year: "2022", Gross: "bad", AfterWithholding: "80.00", Net: "75.00"},
-	}, 2, "en-US")
-	if ok {
-		t.Fatalf("buildDividendsByYearRows() ok = true, want false")
-	}
-}
-
-func TestBuildDividendsByYearRowsFormatsLocale(t *testing.T) {
-	rows, ok := buildDividendsByYearRows([]db.DividendsByYearSourceRow{
-		{Year: "2022", Gross: "100.00", AfterWithholding: "80.00", Net: "75.50"},
-	}, 2, "de-DE")
-	if !ok {
-		t.Fatalf("buildDividendsByYearRows() ok = false, want true")
-	}
-	if len(rows) != 1 {
-		t.Fatalf("buildDividendsByYearRows() len = %d, want 1", len(rows))
-	}
-
-	assertAnalysisRow(t, rows[0], "2022", "100,00", "80,00", "75,50")
-}
-
 func TestBuildDividendsByYearData(t *testing.T) {
 	data, ok := buildDividendsByYearData([]db.DividendsByYearSourceRow{
 		{Year: "2022", Gross: "100.00", AfterWithholding: "80.00", Net: "75.00"},
