@@ -201,6 +201,27 @@ func TestListAccessibleDividendEntriesByUserAppliesOptionalFilters(t *testing.T)
 	}
 }
 
+func TestListAccessibleDividendEntriesByUserSearchesUnicodeCaseVariants(t *testing.T) {
+	database := newDividendEntriesTestDB(t)
+
+	entry := validDividendEntryForDBTest(t, database)
+	entry.SecurityName = "Österreichische Post AG"
+	entry.SecurityISIN = "AT000POST001"
+	if err := database.CreateDividendEntry(&entry); err != nil {
+		t.Fatalf("CreateDividendEntry() error = %v", err)
+	}
+
+	for _, search := range []string{"öst", "Öst"} {
+		items, err := database.ListAccessibleDividendEntriesByUser(1, true, nil, 20, 0, "PayDate", "ASC", DividendEntryListFilters{Search: search})
+		if err != nil {
+			t.Fatalf("ListAccessibleDividendEntriesByUser(%q) error = %v", search, err)
+		}
+		if len(items) != 1 || items[0].ID != entry.ID {
+			t.Fatalf("ListAccessibleDividendEntriesByUser(%q) items = %+v, want Austrian post entry", search, items)
+		}
+	}
+}
+
 func TestGetDividendEntryTimeRangeByDepotID(t *testing.T) {
 	database := newDividendEntriesTestDB(t)
 

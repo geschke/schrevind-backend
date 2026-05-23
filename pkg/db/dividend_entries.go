@@ -308,6 +308,47 @@ func escapeDividendEntryLikePattern(value string) string {
 	return value
 }
 
+func dividendEntrySearchPatterns(search string) []string {
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return nil
+	}
+
+	// SQLite's LOWER/LIKE are ASCII-centric without ICU. Keep multiple variants
+	// so searches for "öst" still match stored values like "Österreichische Post".
+	variants := []string{
+		search,
+		strings.ToLower(search),
+		strings.ToUpper(search),
+	}
+	runes := []rune(search)
+	if len(runes) > 0 {
+		title := append([]rune(nil), runes...)
+		title[0] = []rune(strings.ToUpper(string(title[0])))[0]
+		if len(title) > 1 {
+			tail := strings.ToLower(string(title[1:]))
+			variants = append(variants, string(title[:1])+tail)
+		} else {
+			variants = append(variants, string(title))
+		}
+	}
+
+	seen := make(map[string]struct{}, len(variants))
+	patterns := make([]string, 0, len(variants))
+	for _, variant := range variants {
+		variant = strings.TrimSpace(variant)
+		if variant == "" {
+			continue
+		}
+		if _, ok := seen[variant]; ok {
+			continue
+		}
+		seen[variant] = struct{}{}
+		patterns = append(patterns, "%"+escapeDividendEntryLikePattern(variant)+"%")
+	}
+	return patterns
+}
+
 func appendDividendEntryFilters(query string, args []any, filters DividendEntryListFilters) (string, []any) {
 	fromDate := strings.TrimSpace(filters.FromDate)
 	toDate := strings.TrimSpace(filters.ToDate)
@@ -331,15 +372,28 @@ func appendDividendEntryFilters(query string, args []any, filters DividendEntryL
 		args = append(args, filters.DepotID)
 	}
 	if search != "" {
-		pattern := "%" + escapeDividendEntryLikePattern(strings.ToLower(search)) + "%"
-		query += `   AND (
-       LOWER(de.security_name) LIKE ? ESCAPE '\'
+		patterns := dividendEntrySearchPatterns(search)
+		if len(patterns) > 0 {
+			query += "   AND (\n"
+			for i, pattern := range patterns {
+				if i > 0 {
+					query += "       OR\n"
+				}
+				// Match both raw and LOWER(column): raw handles Unicode case variants
+				// that SQLite LOWER() cannot normalize, LOWER(column) keeps ASCII search easy.
+				query += `       de.security_name LIKE ? ESCAPE '\'
+       OR LOWER(de.security_name) LIKE ? ESCAPE '\'
+       OR de.security_isin LIKE ? ESCAPE '\'
        OR LOWER(de.security_isin) LIKE ? ESCAPE '\'
+       OR de.security_wkn LIKE ? ESCAPE '\'
        OR LOWER(de.security_wkn) LIKE ? ESCAPE '\'
+       OR de.security_symbol LIKE ? ESCAPE '\'
        OR LOWER(de.security_symbol) LIKE ? ESCAPE '\'
-   )
 `
-		args = append(args, pattern, pattern, pattern, pattern)
+				args = append(args, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+			}
+			query += "   )\n"
+		}
 	}
 
 	return query, args

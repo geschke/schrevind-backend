@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/shopspring/decimal"
 
@@ -314,22 +315,18 @@ func normalizeDividendEntrySearch(value string) (string, bool) {
 	if value == "" {
 		return "", true
 	}
-	if len(value) > 50 {
+	if len([]rune(value)) > 50 {
 		return "", false
 	}
-	for i := 0; i < len(value); i++ {
-		ch := value[i]
-		if ch >= 'a' && ch <= 'z' {
+	for _, ch := range value {
+		if unicode.IsLetter(ch) {
 			continue
 		}
-		if ch >= 'A' && ch <= 'Z' {
-			continue
-		}
-		if ch >= '0' && ch <= '9' {
+		if unicode.IsDigit(ch) {
 			continue
 		}
 		switch ch {
-		case ' ', '.', '-', '_', '/':
+		case ' ', '.', '-', '_', '/', '&', '+', '(', ')', '\'':
 			continue
 		default:
 			return "", false

@@ -61,6 +61,14 @@ func TestNormalizeDividendEntrySearch(t *testing.T) {
 		t.Fatalf("normalizeDividendEntrySearch() = %q, want normalized spaces", got)
 	}
 
+	got, ok = normalizeDividendEntrySearch("  kön  München  ")
+	if !ok {
+		t.Fatalf("normalizeDividendEntrySearch() with umlaut ok = false")
+	}
+	if got != "kön München" {
+		t.Fatalf("normalizeDividendEntrySearch() with umlaut = %q, want normalized umlaut search", got)
+	}
+
 	if _, ok := normalizeDividendEntrySearch("Cola; DROP"); ok {
 		t.Fatalf("normalizeDividendEntrySearch() accepted invalid characters")
 	}
