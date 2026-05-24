@@ -107,7 +107,7 @@ func TestListSecuritiesByGroupIDScopesResults(t *testing.T) {
 		t.Fatalf("CreateSecurity(group B) error = %v", err)
 	}
 
-	items, err := database.ListSecuritiesByGroupID(groupA.ID, 10, 0, "Name", "ASC", "")
+	items, err := database.ListSecuritiesByGroupID(groupA.ID, 10, 0, "Name", "ASC", "", "")
 	if err != nil {
 		t.Fatalf("ListSecuritiesByGroupID(group A) error = %v", err)
 	}
@@ -121,6 +121,64 @@ func TestListSecuritiesByGroupIDScopesResults(t *testing.T) {
 	}
 	if len(allItems) != 1 || allItems[0].ID != second.ID || allItems[0].GroupID != groupB.ID {
 		t.Fatalf("group B all items = %+v, want only security %+v", allItems, second)
+	}
+}
+
+func TestListSecuritiesByGroupIDSearchesFields(t *testing.T) {
+	database := newSecuritiesTestDB(t)
+	group := createSecurityTestGroup(t, database, "Search Securities Group")
+
+	post := Security{
+		GroupID: group.ID,
+		Name:    "Österreichische Post AG",
+		ISIN:    "AT000POST001",
+		WKN:     "POST01",
+		Symbol:  "POST",
+		Status:  SecurityStatusActive,
+	}
+	if err := database.CreateSecurity(&post); err != nil {
+		t.Fatalf("CreateSecurity(post) error = %v", err)
+	}
+
+	cola := Security{
+		GroupID: group.ID,
+		Name:    "Cola Drinks AG",
+		ISIN:    "DE000COLA001",
+		WKN:     "COLA01",
+		Symbol:  "COL",
+		Status:  SecurityStatusActive,
+	}
+	if err := database.CreateSecurity(&cola); err != nil {
+		t.Fatalf("CreateSecurity(cola) error = %v", err)
+	}
+
+	for _, tc := range []struct {
+		name   string
+		search string
+		wantID int64
+	}{
+		{name: "lowercase umlaut prefix", search: "öst", wantID: post.ID},
+		{name: "uppercase umlaut prefix", search: "Öst", wantID: post.ID},
+		{name: "wkn", search: "POST01", wantID: post.ID},
+		{name: "symbol", search: "COL", wantID: cola.ID},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			items, err := database.ListSecuritiesByGroupID(group.ID, 10, 0, "Name", "ASC", "", tc.search)
+			if err != nil {
+				t.Fatalf("ListSecuritiesByGroupID(search %q) error = %v", tc.search, err)
+			}
+			if len(items) != 1 || items[0].ID != tc.wantID {
+				t.Fatalf("ListSecuritiesByGroupID(search %q) = %+v, want only ID %d", tc.search, items, tc.wantID)
+			}
+
+			count, err := database.CountSecuritiesByGroupID(group.ID, "", tc.search)
+			if err != nil {
+				t.Fatalf("CountSecuritiesByGroupID(search %q) error = %v", tc.search, err)
+			}
+			if count != 1 {
+				t.Fatalf("CountSecuritiesByGroupID(search %q) = %d, want 1", tc.search, count)
+			}
+		})
 	}
 }
 

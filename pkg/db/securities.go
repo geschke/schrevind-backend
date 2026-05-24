@@ -108,6 +108,90 @@ func normalizeSecuritySortDirection(direction string) (string, error) {
 	}
 }
 
+func escapeSecurityLikePattern(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	value = strings.ReplaceAll(value, `%`, `\%`)
+	value = strings.ReplaceAll(value, `_`, `\_`)
+	return value
+}
+
+func securitySearchPatterns(search string) []string {
+	search = strings.TrimSpace(search)
+	if search == "" {
+		return nil
+	}
+
+	// SQLite's LOWER/LIKE are ASCII-centric without ICU. Keep multiple variants
+	// so searches for "ost" with umlauts still match stored Unicode values.
+	variants := []string{
+		search,
+		strings.ToLower(search),
+		strings.ToUpper(search),
+	}
+	runes := []rune(search)
+	if len(runes) > 0 {
+		title := append([]rune(nil), runes...)
+		title[0] = []rune(strings.ToUpper(string(title[0])))[0]
+		if len(title) > 1 {
+			tail := strings.ToLower(string(title[1:]))
+			variants = append(variants, string(title[:1])+tail)
+		} else {
+			variants = append(variants, string(title))
+		}
+	}
+
+	seen := make(map[string]struct{}, len(variants))
+	patterns := make([]string, 0, len(variants))
+	for _, variant := range variants {
+		variant = strings.TrimSpace(variant)
+		if variant == "" {
+			continue
+		}
+		if _, ok := seen[variant]; ok {
+			continue
+		}
+		seen[variant] = struct{}{}
+		patterns = append(patterns, "%"+escapeSecurityLikePattern(variant)+"%")
+	}
+	return patterns
+}
+
+func appendSecurityListFilters(query string, args []any, status, search string) (string, []any) {
+	status = strings.TrimSpace(status)
+	search = strings.TrimSpace(search)
+
+	if status != "" {
+		query += "   AND status = ?\n"
+		args = append(args, status)
+	}
+	if search != "" {
+		patterns := securitySearchPatterns(search)
+		if len(patterns) > 0 {
+			query += "   AND (\n"
+			for i, pattern := range patterns {
+				if i > 0 {
+					query += "       OR\n"
+				}
+				// Match both raw and LOWER(column): raw handles Unicode case variants
+				// that SQLite LOWER() cannot normalize, LOWER(column) keeps ASCII search easy.
+				query += `       name LIKE ? ESCAPE '\'
+       OR LOWER(name) LIKE ? ESCAPE '\'
+       OR isin LIKE ? ESCAPE '\'
+       OR LOWER(isin) LIKE ? ESCAPE '\'
+       OR wkn LIKE ? ESCAPE '\'
+       OR LOWER(wkn) LIKE ? ESCAPE '\'
+       OR symbol LIKE ? ESCAPE '\'
+       OR LOWER(symbol) LIKE ? ESCAPE '\'
+`
+				args = append(args, pattern, pattern, pattern, pattern, pattern, pattern, pattern, pattern)
+			}
+			query += "   )\n"
+		}
+	}
+
+	return query, args
+}
+
 // CreateSecurity creates a new record.
 func (d *DB) CreateSecurity(security *Security) error {
 	if d == nil || d.SQL == nil {
@@ -296,7 +380,7 @@ SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
 }
 
 // ListSecuritiesByGroupID returns a filtered and paginated list of securities for a group.
-func (d *DB) ListSecuritiesByGroupID(groupID int64, limit, offset int, sortBy, direction, status string) ([]Security, error) {
+func (d *DB) ListSecuritiesByGroupID(groupID int64, limit, offset int, sortBy, direction, status, search string) ([]Security, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
@@ -319,8 +403,6 @@ func (d *DB) ListSecuritiesByGroupID(groupID int64, limit, offset int, sortBy, d
 		return nil, fmt.Errorf("list securities page by group: %w", err)
 	}
 
-	status = strings.TrimSpace(status)
-
 	query := `
 SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
   FROM securities
@@ -329,10 +411,7 @@ SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
 	args := make([]any, 0, 4)
 	args = append(args, groupID)
 
-	if status != "" {
-		query += "   AND status = ?\n"
-		args = append(args, status)
-	}
+	query, args = appendSecurityListFilters(query, args, status, search)
 
 	query += " ORDER BY " + sortColumn + " " + sortDirection + ", id " + sortDirection + "\n"
 	query += " LIMIT ? OFFSET ?;"
@@ -425,9 +504,9 @@ SELECT id, group_id, name, isin, wkn, symbol, status, created_at, updated_at
 	return out, nil
 }
 
-// CountSecuritiesByGroupID returns the total number of securities matching the given group and status filter.
-// An empty status string counts all securities in the group regardless of status.
-func (d *DB) CountSecuritiesByGroupID(groupID int64, status string) (int64, error) {
+// CountSecuritiesByGroupID returns the total number of securities matching the given group, status, and search filters.
+// Empty status and search strings are ignored.
+func (d *DB) CountSecuritiesByGroupID(groupID int64, status, search string) (int64, error) {
 	if d == nil || d.SQL == nil {
 		return 0, fmt.Errorf("db not initialized")
 	}
@@ -435,14 +514,10 @@ func (d *DB) CountSecuritiesByGroupID(groupID int64, status string) (int64, erro
 		return 0, fmt.Errorf("groupID must be > 0")
 	}
 
-	status = strings.TrimSpace(status)
-	query := `SELECT COUNT(*) FROM securities WHERE group_id = ?`
+	query := "SELECT COUNT(*) FROM securities WHERE group_id = ?\n"
 	args := make([]any, 0, 2)
 	args = append(args, groupID)
-	if status != "" {
-		query += " AND status = ?"
-		args = append(args, status)
-	}
+	query, args = appendSecurityListFilters(query, args, status, search)
 	query += ";"
 
 	var count int64

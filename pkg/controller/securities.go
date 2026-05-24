@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"unicode"
 
 	"github.com/geschke/schrevind/config"
 	"github.com/geschke/schrevind/pkg/cors"
@@ -157,13 +158,38 @@ func isValidSecurityStatusFilter(status string) bool {
 	return isValidSecurityStatus(status)
 }
 
+func normalizeSecuritySearch(value string) (string, bool) {
+	value = strings.Join(strings.Fields(strings.TrimSpace(value)), " ")
+	if value == "" {
+		return "", true
+	}
+	if len([]rune(value)) > 50 {
+		return "", false
+	}
+	for _, ch := range value {
+		if unicode.IsLetter(ch) {
+			continue
+		}
+		if unicode.IsDigit(ch) {
+			continue
+		}
+		switch ch {
+		case ' ', '.', '-', '_', '/', '&', '+', '(', ')', '\'':
+			continue
+		default:
+			return "", false
+		}
+	}
+	return value, true
+}
+
 // parseSecurityListParams performs its package-specific operation.
-func parseSecurityListParams(c *gin.Context) (int, int, string, string, string, error) {
+func parseSecurityListParams(c *gin.Context) (int, int, string, string, string, string, error) {
 	limit := 10
 	if v := strings.TrimSpace(c.Query("limit")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 || n > 100 {
-			return 0, 0, "", "", "", errors.New("INVALID_LIMIT")
+			return 0, 0, "", "", "", "", errors.New("INVALID_LIMIT")
 		}
 		limit = n
 	}
@@ -172,7 +198,7 @@ func parseSecurityListParams(c *gin.Context) (int, int, string, string, string, 
 	if v := strings.TrimSpace(c.Query("offset")); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil || n < 0 {
-			return 0, 0, "", "", "", errors.New("INVALID_OFFSET")
+			return 0, 0, "", "", "", "", errors.New("INVALID_OFFSET")
 		}
 		offset = n
 	}
@@ -183,7 +209,7 @@ func parseSecurityListParams(c *gin.Context) (int, int, string, string, string, 
 		case "ID", "Name", "ISIN", "WKN", "Symbol", "Status", "CreatedAt", "UpdatedAt":
 			sortBy = v
 		default:
-			return 0, 0, "", "", "", errors.New("INVALID_SORT")
+			return 0, 0, "", "", "", "", errors.New("INVALID_SORT")
 		}
 	}
 
@@ -197,16 +223,25 @@ func parseSecurityListParams(c *gin.Context) (int, int, string, string, string, 
 		case "none":
 			direction = "ASC"
 		default:
-			return 0, 0, "", "", "", errors.New("INVALID_DIRECTION")
+			return 0, 0, "", "", "", "", errors.New("INVALID_DIRECTION")
 		}
 	}
 
 	status := strings.ToLower(strings.TrimSpace(c.Query("status")))
 	if !isValidSecurityStatusFilter(status) {
-		return 0, 0, "", "", "", errors.New("INVALID_STATUS_FILTER")
+		return 0, 0, "", "", "", "", errors.New("INVALID_STATUS_FILTER")
 	}
 
-	return limit, offset, sortBy, direction, status, nil
+	search := ""
+	if _, exists := c.GetQuery("search"); exists {
+		normalized, ok := normalizeSecuritySearch(c.Query("search"))
+		if !ok {
+			return 0, 0, "", "", "", "", errors.New("INVALID_SEARCH")
+		}
+		search = normalized
+	}
+
+	return limit, offset, sortBy, direction, status, search, nil
 }
 
 // normalizeSecurityPayload performs its package-specific operation.
@@ -279,19 +314,19 @@ func (ct SecuritiesController) GetList(c *gin.Context) {
 		return
 	}
 
-	limit, offset, sortBy, direction, status, err := parseSecurityListParams(c)
+	limit, offset, sortBy, direction, status, search, err := parseSecurityListParams(c)
 	if err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": err.Error()})
 		return
 	}
 
-	items, err := ct.DB.ListSecuritiesByGroupID(groupID, limit, offset, sortBy, direction, status)
+	items, err := ct.DB.ListSecuritiesByGroupID(groupID, limit, offset, sortBy, direction, status, search)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 
-	count, err := ct.DB.CountSecuritiesByGroupID(groupID, status)
+	count, err := ct.DB.CountSecuritiesByGroupID(groupID, status, search)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
