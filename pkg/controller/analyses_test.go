@@ -379,11 +379,11 @@ func TestBuildDividendsBySecurityYearData(t *testing.T) {
 	if len(data.Securities[0].Rows) != 3 {
 		t.Fatalf("first security rows len = %d, want 3", len(data.Securities[0].Rows))
 	}
-	assertSecurityYearDataRow(t, data.Securities[0].Rows[0], "2024", "75", "30.00", "25.00", "24.00", "detail")
-	assertSecurityYearDataRow(t, data.Securities[0].Rows[1], "2024", "90", "15.00", "13.00", "12.50", "detail")
-	assertSecurityYearDataRow(t, data.Securities[0].Rows[2], "", "", "45.00", "38.00", "36.50", "summary")
-	assertSecurityYearDataRow(t, data.Securities[1].Rows[0], "2023", "10", "5.00", "4.00", "3.50", "detail")
-	assertSecurityYearDataRow(t, data.Securities[1].Rows[1], "", "", "5.00", "4.00", "3.50", "summary")
+	assertSecurityYearDataRow(t, data.Securities[0].Rows[0], "2024", "75", "30.00", "25.00", "24.00", 2, "detail")
+	assertSecurityYearDataRow(t, data.Securities[0].Rows[1], "2024", "90", "15.00", "13.00", "12.50", 1, "detail")
+	assertSecurityYearDataRow(t, data.Securities[0].Rows[2], "", "", "45.00", "38.00", "36.50", 3, "summary")
+	assertSecurityYearDataRow(t, data.Securities[1].Rows[0], "2023", "10", "5.00", "4.00", "3.50", 1, "detail")
+	assertSecurityYearDataRow(t, data.Securities[1].Rows[1], "", "", "5.00", "4.00", "3.50", 1, "summary")
 }
 
 func TestBuildDividendsByYearMonthSecurityData(t *testing.T) {
@@ -510,7 +510,7 @@ func assertYearMonthChartRow(t *testing.T, got YearMonthChartRow, year, month, g
 	}
 }
 
-func assertSecurityYearDataRow(t *testing.T, row SecurityYearDataRow, year, quantity, gross, afterWithholding, net, rowType string) {
+func assertSecurityYearDataRow(t *testing.T, row SecurityYearDataRow, year, quantity, gross, afterWithholding, net string, paymentCount int, rowType string) {
 	t.Helper()
 	if row.Year != year {
 		t.Fatalf("row Year = %q, want %q", row.Year, year)
@@ -526,6 +526,9 @@ func assertSecurityYearDataRow(t *testing.T, row SecurityYearDataRow, year, quan
 	}
 	if row.Net != net {
 		t.Fatalf("row Net = %q, want %q", row.Net, net)
+	}
+	if row.PaymentCount != paymentCount {
+		t.Fatalf("row PaymentCount = %d, want %d", row.PaymentCount, paymentCount)
 	}
 	if row.Type != rowType {
 		t.Fatalf("row Type = %q, want %q", row.Type, rowType)

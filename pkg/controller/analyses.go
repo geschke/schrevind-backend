@@ -111,6 +111,7 @@ type SecurityYearDataRow struct {
 	Gross            string `json:"Gross"`
 	AfterWithholding string `json:"AfterWithholding"`
 	Net              string `json:"Net"`
+	PaymentCount     int    `json:"PaymentCount"`
 	Type             string `json:"Type"`
 }
 
@@ -196,6 +197,7 @@ type dividendsByYearTotals struct {
 	Gross            decimal.Decimal
 	AfterWithholding decimal.Decimal
 	Net              decimal.Decimal
+	PaymentCount     int
 }
 
 type dividendsByYearMonthTotals struct {
@@ -224,6 +226,7 @@ type dividendsBySecurityYearGroup struct {
 	Gross            decimal.Decimal
 	AfterWithholding decimal.Decimal
 	Net              decimal.Decimal
+	PaymentCount     int
 }
 
 type dividendsByYearMonthSecurityGroupKey struct {
@@ -1358,6 +1361,7 @@ func buildDividendsBySecurityYearData(sourceRows []db.DividendsBySecurityYearDat
 		group.Gross = group.Gross.Add(gross)
 		group.AfterWithholding = group.AfterWithholding.Add(afterWithholding)
 		group.Net = group.Net.Add(net)
+		group.PaymentCount++
 	}
 
 	groups := make([]dividendsBySecurityYearGroup, 0, len(groupsByKey))
@@ -1409,6 +1413,7 @@ func buildDividendsBySecurityYearData(sourceRows []db.DividendsBySecurityYearDat
 		currentTotals.Gross = currentTotals.Gross.Add(group.Gross)
 		currentTotals.AfterWithholding = currentTotals.AfterWithholding.Add(group.AfterWithholding)
 		currentTotals.Net = currentTotals.Net.Add(group.Net)
+		currentTotals.PaymentCount += group.PaymentCount
 	}
 	appendSummary()
 
@@ -1446,6 +1451,7 @@ func buildDividendsBySecurityYearDataDetailRow(group dividendsBySecurityYearGrou
 		Gross:            displayformat.DecimalForLocale(group.Gross.StringFixed(decimalPlaces), locale),
 		AfterWithholding: displayformat.DecimalForLocale(group.AfterWithholding.StringFixed(decimalPlaces), locale),
 		Net:              displayformat.DecimalForLocale(group.Net.StringFixed(decimalPlaces), locale),
+		PaymentCount:     group.PaymentCount,
 		Type:             "detail",
 	}
 }
@@ -1457,6 +1463,7 @@ func buildDividendsBySecurityYearDataSummaryRow(totals dividendsByYearTotals, de
 		Gross:            displayformat.DecimalForLocale(totals.Gross.StringFixed(decimalPlaces), locale),
 		AfterWithholding: displayformat.DecimalForLocale(totals.AfterWithholding.StringFixed(decimalPlaces), locale),
 		Net:              displayformat.DecimalForLocale(totals.Net.StringFixed(decimalPlaces), locale),
+		PaymentCount:     totals.PaymentCount,
 		Type:             "summary",
 	}
 }
