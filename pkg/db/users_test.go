@@ -65,6 +65,7 @@ func TestUpdateUserSettingsStoresSettings(t *testing.T) {
 	updated, err := database.UpdateUserSettings(context.Background(), userID, UserSettings{
 		LastActiveGroupID: 42,
 		Theme:             "dark",
+		UIMode:            "light",
 		InlandTaxTemplate: "DE",
 	})
 	if err != nil {
@@ -81,8 +82,8 @@ func TestUpdateUserSettingsStoresSettings(t *testing.T) {
 	if !found {
 		t.Fatalf("GetUserByID() found = false, want true")
 	}
-	if user.Settings == nil || user.Settings.LastActiveGroupID != 42 || user.Settings.Theme != "dark" || user.Settings.InlandTaxTemplate != "DE" {
-		t.Fatalf("Settings = %+v, want LastActiveGroupID 42, Theme dark and InlandTaxTemplate DE", user.Settings)
+	if user.Settings == nil || user.Settings.LastActiveGroupID != 42 || user.Settings.Theme != "dark" || user.Settings.UIMode != "light" || user.Settings.InlandTaxTemplate != "DE" {
+		t.Fatalf("Settings = %+v, want LastActiveGroupID 42, Theme dark, UIMode light and InlandTaxTemplate DE", user.Settings)
 	}
 }
 

@@ -2,6 +2,24 @@ package controller
 
 import "testing"
 
+func TestValidateUserSettingsString(t *testing.T) {
+	got, ok := validateUserSettingsString(" dark ")
+	if !ok {
+		t.Fatalf("validateUserSettingsString() ok = false")
+	}
+	if got != "dark" {
+		t.Fatalf("validateUserSettingsString() = %q, want dark", got)
+	}
+
+	if _, ok := validateUserSettingsString("dark\nmode"); ok {
+		t.Fatalf("validateUserSettingsString() accepted control character")
+	}
+
+	if _, ok := validateUserSettingsString("123456789012345678901234567890123456789012345678901"); ok {
+		t.Fatalf("validateUserSettingsString() accepted value longer than 50 characters")
+	}
+}
+
 func TestValidateUserInlandTaxTemplate(t *testing.T) {
 	tests := []struct {
 		name string

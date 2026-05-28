@@ -133,17 +133,25 @@ func sanitizeUserForResponse(u db.User) db.User {
 	return u
 }
 
-func validateUserTheme(theme string) (string, bool) {
-	theme = strings.TrimSpace(theme)
-	if utf8.RuneCountInString(theme) > 50 {
+func validateUserSettingsString(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if utf8.RuneCountInString(value) > 50 {
 		return "", false
 	}
-	for _, r := range theme {
+	for _, r := range value {
 		if unicode.IsControl(r) {
 			return "", false
 		}
 	}
-	return theme, true
+	return value, true
+}
+
+func validateUserTheme(theme string) (string, bool) {
+	return validateUserSettingsString(theme)
+}
+
+func validateUserUIMode(uiMode string) (string, bool) {
+	return validateUserSettingsString(uiMode)
 }
 
 func validateUserInlandTaxTemplate(template string) (string, bool) {
@@ -736,6 +744,14 @@ func (ct UsersController) PostSettings(c *gin.Context) {
 			return
 		}
 		settings.Theme = theme
+	}
+	if req.UIMode != nil {
+		uiMode, ok := validateUserUIMode(*req.UIMode)
+		if !ok {
+			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_UI_MODE"})
+			return
+		}
+		settings.UIMode = uiMode
 	}
 	if req.InlandTaxTemplate != nil {
 		template, ok := validateUserInlandTaxTemplate(*req.InlandTaxTemplate)
