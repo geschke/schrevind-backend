@@ -163,6 +163,8 @@ func Start(database *db.DB) error {
 		router.OPTIONS("/api/analyses/dividends-by-year-chart", analysesCtl.Options)
 		router.GET("/api/analyses/dividends-by-year-month-chart", analysesCtl.GetDividendsByYearMonthChart)
 		router.OPTIONS("/api/analyses/dividends-by-year-month-chart", analysesCtl.Options)
+		router.GET("/api/analyses/dividends-by-security-month-share-chart", analysesCtl.GetDividendsBySecurityMonthShareChart)
+		router.OPTIONS("/api/analyses/dividends-by-security-month-share-chart", analysesCtl.Options)
 
 		dividendEntriesCtl := controller.NewDividendEntriesController(database, store, sessionName, g)
 		router.GET("/api/dividend-entries/by-user/:user_id", dividendEntriesCtl.GetListByUser)

@@ -87,6 +87,38 @@ type YearMonthChartRow struct {
 	Currency         string          `json:"currency"`
 }
 
+type SecurityMonthShareChartResponse struct {
+	Success bool                                `json:"success"`
+	Message string                              `json:"message"`
+	Data    SecurityMonthShareChartResponseData `json:"data"`
+}
+
+type SecurityMonthShareChartResponseData struct {
+	Year     string                       `json:"Year"`
+	Month    string                       `json:"Month"`
+	Currency string                       `json:"Currency"`
+	Totals   SecurityMonthShareChartTotal `json:"Totals"`
+	Rows     []SecurityMonthShareChartRow `json:"Rows"`
+}
+
+type SecurityMonthShareChartTotal struct {
+	Gross            string `json:"Gross"`
+	AfterWithholding string `json:"AfterWithholding"`
+	Net              string `json:"Net"`
+}
+
+type SecurityMonthShareChartRow struct {
+	SecurityID                 int64  `json:"SecurityID"`
+	SecurityName               string `json:"SecurityName"`
+	SecurityISIN               string `json:"SecurityISIN"`
+	Gross                      string `json:"Gross"`
+	GrossPercentage            string `json:"GrossPercentage"`
+	AfterWithholding           string `json:"AfterWithholding"`
+	AfterWithholdingPercentage string `json:"AfterWithholdingPercentage"`
+	Net                        string `json:"Net"`
+	NetPercentage              string `json:"NetPercentage"`
+}
+
 type SecurityYearDataResponse struct {
 	Success bool                         `json:"success"`
 	Message string                       `json:"message"`
@@ -239,6 +271,19 @@ type dividendsByYearMonthSecurityGroupKey struct {
 
 type dividendsByYearMonthSecurityGroup struct {
 	dividendsByYearMonthSecurityGroupKey
+	Gross            decimal.Decimal
+	AfterWithholding decimal.Decimal
+	Net              decimal.Decimal
+}
+
+type securityMonthShareGroupKey struct {
+	SecurityID   int64
+	SecurityName string
+	SecurityISIN string
+}
+
+type securityMonthShareGroup struct {
+	securityMonthShareGroupKey
 	Gross            decimal.Decimal
 	AfterWithholding decimal.Decimal
 	Net              decimal.Decimal
@@ -1003,8 +1048,143 @@ func (ct AnalysesController) GetDividendsByYearMonthChart(c *gin.Context) {
 	})
 }
 
+// GetDividendsBySecurityMonthShareChart handles GET /api/analyses/dividends-by-security-month-share-chart.
+func (ct AnalysesController) GetDividendsBySecurityMonthShareChart(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	groupID, ok := parseAnalysisContextGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
+		return
+	}
+
+	year, month, ok := parseAnalysisYearMonthQuery(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, err := ct.DB.ListDepotsForActionScope(userID, scope.All, scope.Roles)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, ok, statusCode, message := filterDepotsByQuery(c, depots)
+	if !ok {
+		c.JSON(statusCode, gin.H{"success": false, "message": message})
+		return
+	}
+
+	baseCurrency, ok, currencies := uniqueDepotBaseCurrency(depots)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "ANALYSIS_MULTIPLE_BASE_CURRENCIES",
+			"currencies": currencies,
+		})
+		return
+	}
+
+	decimalPlaces, ok := ct.loadDecimalPlacesForBaseCurrency(groupID, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depotIDs := make([]int64, 0, len(depots))
+	for _, depot := range depots {
+		depotIDs = append(depotIDs, depot.ID)
+	}
+
+	sourceRows, err := ct.DB.ListDividendAnalysisYearMonthSecurityDataRowsByDepotIDs(
+		depotIDs,
+		nil,
+		[]db.DividendAnalysisYearMonthPeriod{{Year: year, Month: month}},
+	)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	data, ok := buildDividendsBySecurityMonthShareChartData(sourceRows, decimalPlaces, baseCurrency, locale, year, month)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "ANALYSIS_INVALID_DECIMAL_VALUE"})
+		return
+	}
+
+	c.JSON(http.StatusOK, SecurityMonthShareChartResponse{
+		Success: true,
+		Message: "ANALYSIS_OK",
+		Data:    data,
+	})
+}
+
 func filterDepotsByQuery(c *gin.Context, depots []db.Depot) ([]db.Depot, bool, int, string) {
 	return filterDepotsByRequestedIDs(c.QueryArray("depot_id"), depots)
+}
+
+func parseAnalysisYearMonthQuery(c *gin.Context) (string, string, bool) {
+	year := strings.TrimSpace(c.Query("year"))
+	if len(year) != 4 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_YEAR_FORMAT"})
+		return "", "", false
+	}
+	yearInt, err := strconv.Atoi(year)
+	if err != nil || yearInt <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_YEAR_FORMAT"})
+		return "", "", false
+	}
+
+	month := strings.TrimSpace(c.Query("month"))
+	if len(month) != 2 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_MONTH_FORMAT"})
+		return "", "", false
+	}
+	monthInt, err := strconv.Atoi(month)
+	if err != nil || monthInt < 1 || monthInt > 12 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_MONTH_FORMAT"})
+		return "", "", false
+	}
+
+	return year, month, true
 }
 
 func parseAnalysisSecurityIDs(c *gin.Context) ([]int64, bool) {
@@ -1322,6 +1502,101 @@ func buildDividendsByYearMonthChartData(sourceRows []db.DividendsByYearMonthSour
 	}
 
 	return data, true
+}
+
+func buildDividendsBySecurityMonthShareChartData(sourceRows []db.DividendsByYearMonthSecuritySourceRow, decimalPlaces int32, currency, locale, year, month string) (SecurityMonthShareChartResponseData, bool) {
+	groupsByKey := make(map[securityMonthShareGroupKey]*securityMonthShareGroup)
+	var totals dividendsByYearTotals
+
+	for _, sourceRow := range sourceRows {
+		gross, err := decimal.NewFromString(sourceRow.Gross)
+		if err != nil {
+			return SecurityMonthShareChartResponseData{}, false
+		}
+		afterWithholding, err := decimal.NewFromString(sourceRow.AfterWithholding)
+		if err != nil {
+			return SecurityMonthShareChartResponseData{}, false
+		}
+		net, err := decimal.NewFromString(sourceRow.Net)
+		if err != nil {
+			return SecurityMonthShareChartResponseData{}, false
+		}
+
+		key := securityMonthShareGroupKey{
+			SecurityID:   sourceRow.SecurityID,
+			SecurityName: sourceRow.SecurityName,
+			SecurityISIN: sourceRow.SecurityISIN,
+		}
+		group := groupsByKey[key]
+		if group == nil {
+			group = &securityMonthShareGroup{securityMonthShareGroupKey: key}
+			groupsByKey[key] = group
+		}
+		group.Gross = group.Gross.Add(gross)
+		group.AfterWithholding = group.AfterWithholding.Add(afterWithholding)
+		group.Net = group.Net.Add(net)
+
+		totals.Gross = totals.Gross.Add(gross)
+		totals.AfterWithholding = totals.AfterWithholding.Add(afterWithholding)
+		totals.Net = totals.Net.Add(net)
+	}
+
+	groups := make([]securityMonthShareGroup, 0, len(groupsByKey))
+	for _, group := range groupsByKey {
+		groups = append(groups, *group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		return securityMonthShareGroupLess(groups[i], groups[j])
+	})
+
+	rows := make([]SecurityMonthShareChartRow, 0, len(groups))
+	for _, group := range groups {
+		rows = append(rows, SecurityMonthShareChartRow{
+			SecurityID:                 group.SecurityID,
+			SecurityName:               group.SecurityName,
+			SecurityISIN:               group.SecurityISIN,
+			Gross:                      displayformat.DecimalForLocale(group.Gross.StringFixed(decimalPlaces), locale),
+			GrossPercentage:            percentString(group.Gross, totals.Gross),
+			AfterWithholding:           displayformat.DecimalForLocale(group.AfterWithholding.StringFixed(decimalPlaces), locale),
+			AfterWithholdingPercentage: percentString(group.AfterWithholding, totals.AfterWithholding),
+			Net:                        displayformat.DecimalForLocale(group.Net.StringFixed(decimalPlaces), locale),
+			NetPercentage:              percentString(group.Net, totals.Net),
+		})
+	}
+
+	return SecurityMonthShareChartResponseData{
+		Year:     year,
+		Month:    month,
+		Currency: currency,
+		Totals: SecurityMonthShareChartTotal{
+			Gross:            displayformat.DecimalForLocale(totals.Gross.StringFixed(decimalPlaces), locale),
+			AfterWithholding: displayformat.DecimalForLocale(totals.AfterWithholding.StringFixed(decimalPlaces), locale),
+			Net:              displayformat.DecimalForLocale(totals.Net.StringFixed(decimalPlaces), locale),
+		},
+		Rows: rows,
+	}, true
+}
+
+func securityMonthShareGroupLess(left, right securityMonthShareGroup) bool {
+	leftName := strings.ToLower(left.SecurityName)
+	rightName := strings.ToLower(right.SecurityName)
+	if leftName != rightName {
+		return leftName < rightName
+	}
+	if left.SecurityName != right.SecurityName {
+		return left.SecurityName < right.SecurityName
+	}
+	if left.SecurityISIN != right.SecurityISIN {
+		return left.SecurityISIN < right.SecurityISIN
+	}
+	return left.SecurityID < right.SecurityID
+}
+
+func percentString(value, total decimal.Decimal) string {
+	if total.IsZero() {
+		return "0.00"
+	}
+	return value.Mul(decimal.NewFromInt(100)).Div(total).StringFixed(2)
 }
 
 func buildDividendsBySecurityYearData(sourceRows []db.DividendsBySecurityYearDataSourceRow, decimalPlaces int32, currency, locale string) (SecurityYearDataResponseData, bool) {

@@ -305,6 +305,38 @@ func TestBuildDividendsByYearMonthChartDataRejectsInvalidDecimal(t *testing.T) {
 	}
 }
 
+func TestBuildDividendsBySecurityMonthShareChartData(t *testing.T) {
+	data, ok := buildDividendsBySecurityMonthShareChartData([]db.DividendsByYearMonthSecuritySourceRow{
+		{Year: "2024", Month: "05", SecurityID: 2, SecurityName: "Example Beta AG", SecurityISIN: "DE000BETA01", Gross: "30.00", AfterWithholding: "24.00", Net: "20.00"},
+		{Year: "2024", Month: "05", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "50.00", AfterWithholding: "40.00", Net: "30.00"},
+		{Year: "2024", Month: "05", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "50.00", AfterWithholding: "36.00", Net: "25.00"},
+	}, 2, "EUR", "en-US", "2024", "05")
+	if !ok {
+		t.Fatalf("buildDividendsBySecurityMonthShareChartData() ok = false, want true")
+	}
+	if data.Year != "2024" || data.Month != "05" || data.Currency != "EUR" {
+		t.Fatalf("period/currency = %+v, want 2024/05 EUR", data)
+	}
+	if data.Totals.Gross != "130.00" || data.Totals.AfterWithholding != "100.00" || data.Totals.Net != "75.00" {
+		t.Fatalf("totals = %+v, want 130.00/100.00/75.00", data.Totals)
+	}
+	if len(data.Rows) != 2 {
+		t.Fatalf("rows len = %d, want 2", len(data.Rows))
+	}
+
+	assertSecurityMonthShareChartRow(t, data.Rows[0], 1, "Example Alpha AG", "DE000ALPHA1", "100.00", "76.92", "76.00", "76.00", "55.00", "73.33")
+	assertSecurityMonthShareChartRow(t, data.Rows[1], 2, "Example Beta AG", "DE000BETA01", "30.00", "23.08", "24.00", "24.00", "20.00", "26.67")
+}
+
+func TestBuildDividendsBySecurityMonthShareChartDataRejectsInvalidDecimal(t *testing.T) {
+	_, ok := buildDividendsBySecurityMonthShareChartData([]db.DividendsByYearMonthSecuritySourceRow{
+		{Year: "2024", Month: "05", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "bad", AfterWithholding: "40.00", Net: "30.00"},
+	}, 2, "EUR", "en-US", "2024", "05")
+	if ok {
+		t.Fatalf("buildDividendsBySecurityMonthShareChartData() ok = true, want false")
+	}
+}
+
 func TestYearChartResponseMarshalsValuesAsJSONNumbers(t *testing.T) {
 	response := YearChartResponse{
 		Success: true,
@@ -507,6 +539,37 @@ func assertYearMonthChartRow(t *testing.T, got YearMonthChartRow, year, month, g
 	}
 	if got.Currency != currency {
 		t.Fatalf("row currency = %q, want %q", got.Currency, currency)
+	}
+}
+
+func assertSecurityMonthShareChartRow(t *testing.T, got SecurityMonthShareChartRow, securityID int64, securityName, securityISIN, gross, grossPercentage, afterWithholding, afterWithholdingPercentage, net, netPercentage string) {
+	t.Helper()
+	if got.SecurityID != securityID {
+		t.Fatalf("row SecurityID = %d, want %d", got.SecurityID, securityID)
+	}
+	if got.SecurityName != securityName {
+		t.Fatalf("row SecurityName = %q, want %q", got.SecurityName, securityName)
+	}
+	if got.SecurityISIN != securityISIN {
+		t.Fatalf("row SecurityISIN = %q, want %q", got.SecurityISIN, securityISIN)
+	}
+	if got.Gross != gross {
+		t.Fatalf("row Gross = %q, want %q", got.Gross, gross)
+	}
+	if got.GrossPercentage != grossPercentage {
+		t.Fatalf("row GrossPercentage = %q, want %q", got.GrossPercentage, grossPercentage)
+	}
+	if got.AfterWithholding != afterWithholding {
+		t.Fatalf("row AfterWithholding = %q, want %q", got.AfterWithholding, afterWithholding)
+	}
+	if got.AfterWithholdingPercentage != afterWithholdingPercentage {
+		t.Fatalf("row AfterWithholdingPercentage = %q, want %q", got.AfterWithholdingPercentage, afterWithholdingPercentage)
+	}
+	if got.Net != net {
+		t.Fatalf("row Net = %q, want %q", got.Net, net)
+	}
+	if got.NetPercentage != netPercentage {
+		t.Fatalf("row NetPercentage = %q, want %q", got.NetPercentage, netPercentage)
 	}
 }
 
