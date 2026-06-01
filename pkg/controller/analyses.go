@@ -101,6 +101,19 @@ type SecurityMonthShareChartResponseData struct {
 	Rows     []SecurityMonthShareChartRow `json:"Rows"`
 }
 
+type SecurityYearShareChartResponse struct {
+	Success bool                               `json:"success"`
+	Message string                             `json:"message"`
+	Data    SecurityYearShareChartResponseData `json:"data"`
+}
+
+type SecurityYearShareChartResponseData struct {
+	Year     string                       `json:"Year"`
+	Currency string                       `json:"Currency"`
+	Totals   SecurityMonthShareChartTotal `json:"Totals"`
+	Rows     []SecurityMonthShareChartRow `json:"Rows"`
+}
+
 type SecurityMonthShareChartTotal struct {
 	Gross            string `json:"Gross"`
 	AfterWithholding string `json:"AfterWithholding"`
@@ -1157,19 +1170,133 @@ func (ct AnalysesController) GetDividendsBySecurityMonthShareChart(c *gin.Contex
 	})
 }
 
+// GetDividendsBySecurityYearShareChart handles GET /api/analyses/dividends-by-security-year-share-chart.
+func (ct AnalysesController) GetDividendsBySecurityYearShareChart(c *gin.Context) {
+	if !cors.ApplyCORS(c, config.Cfg.WebUI.CORSAllowedOrigins) {
+		return
+	}
+	if !ct.ensureAuthorized(c) {
+		return
+	}
+
+	userID, ok := ct.currentSessionUserID(c)
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+	groupID, ok := parseAnalysisContextGroupID(c)
+	if !ok {
+		return
+	}
+	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
+		return
+	}
+
+	year, ok := parseAnalysisYearQuery(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, err := ct.DB.ListDepotsForActionScope(userID, scope.All, scope.Roles)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depots, ok, statusCode, message := filterDepotsByQuery(c, depots)
+	if !ok {
+		c.JSON(statusCode, gin.H{"success": false, "message": message})
+		return
+	}
+
+	baseCurrency, ok, currencies := uniqueDepotBaseCurrency(depots)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"success":    false,
+			"message":    "ANALYSIS_MULTIPLE_BASE_CURRENCIES",
+			"currencies": currencies,
+		})
+		return
+	}
+
+	decimalPlaces, ok := ct.loadDecimalPlacesForBaseCurrency(groupID, baseCurrency)
+	if !ok {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	depotIDs := make([]int64, 0, len(depots))
+	for _, depot := range depots {
+		depotIDs = append(depotIDs, depot.ID)
+	}
+
+	sourceRows, err := ct.DB.ListDividendAnalysisYearSecurityDataRowsByDepotIDs(depotIDs, year)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+
+	locale, ok, err := ct.currentSessionUserLocale(c)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !ok {
+		c.JSON(http.StatusUnauthorized, gin.H{"success": false, "message": "UNAUTHORIZED"})
+		return
+	}
+
+	data, ok := buildDividendsBySecurityYearShareChartData(sourceRows, decimalPlaces, baseCurrency, locale, year)
+	if !ok {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "ANALYSIS_INVALID_DECIMAL_VALUE"})
+		return
+	}
+
+	c.JSON(http.StatusOK, SecurityYearShareChartResponse{
+		Success: true,
+		Message: "ANALYSIS_OK",
+		Data:    data,
+	})
+}
+
 func filterDepotsByQuery(c *gin.Context, depots []db.Depot) ([]db.Depot, bool, int, string) {
 	return filterDepotsByRequestedIDs(c.QueryArray("depot_id"), depots)
 }
 
-func parseAnalysisYearMonthQuery(c *gin.Context) (string, string, bool) {
+func parseAnalysisYearQuery(c *gin.Context) (string, bool) {
 	year := strings.TrimSpace(c.Query("year"))
 	if len(year) != 4 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_YEAR_FORMAT"})
-		return "", "", false
+		return "", false
 	}
 	yearInt, err := strconv.Atoi(year)
 	if err != nil || yearInt <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_YEAR_FORMAT"})
+		return "", false
+	}
+
+	return year, true
+}
+
+func parseAnalysisYearMonthQuery(c *gin.Context) (string, string, bool) {
+	year, ok := parseAnalysisYearQuery(c)
+	if !ok {
 		return "", "", false
 	}
 
@@ -1567,6 +1694,78 @@ func buildDividendsBySecurityMonthShareChartData(sourceRows []db.DividendsByYear
 	return SecurityMonthShareChartResponseData{
 		Year:     year,
 		Month:    month,
+		Currency: currency,
+		Totals: SecurityMonthShareChartTotal{
+			Gross:            displayformat.DecimalForLocale(totals.Gross.StringFixed(decimalPlaces), locale),
+			AfterWithholding: displayformat.DecimalForLocale(totals.AfterWithholding.StringFixed(decimalPlaces), locale),
+			Net:              displayformat.DecimalForLocale(totals.Net.StringFixed(decimalPlaces), locale),
+		},
+		Rows: rows,
+	}, true
+}
+
+func buildDividendsBySecurityYearShareChartData(sourceRows []db.DividendsByYearSecuritySourceRow, decimalPlaces int32, currency, locale, year string) (SecurityYearShareChartResponseData, bool) {
+	groupsByKey := make(map[securityMonthShareGroupKey]*securityMonthShareGroup)
+	var totals dividendsByYearTotals
+
+	for _, sourceRow := range sourceRows {
+		gross, err := decimal.NewFromString(sourceRow.Gross)
+		if err != nil {
+			return SecurityYearShareChartResponseData{}, false
+		}
+		afterWithholding, err := decimal.NewFromString(sourceRow.AfterWithholding)
+		if err != nil {
+			return SecurityYearShareChartResponseData{}, false
+		}
+		net, err := decimal.NewFromString(sourceRow.Net)
+		if err != nil {
+			return SecurityYearShareChartResponseData{}, false
+		}
+
+		key := securityMonthShareGroupKey{
+			SecurityID:   sourceRow.SecurityID,
+			SecurityName: sourceRow.SecurityName,
+			SecurityISIN: sourceRow.SecurityISIN,
+		}
+		group := groupsByKey[key]
+		if group == nil {
+			group = &securityMonthShareGroup{securityMonthShareGroupKey: key}
+			groupsByKey[key] = group
+		}
+		group.Gross = group.Gross.Add(gross)
+		group.AfterWithholding = group.AfterWithholding.Add(afterWithholding)
+		group.Net = group.Net.Add(net)
+
+		totals.Gross = totals.Gross.Add(gross)
+		totals.AfterWithholding = totals.AfterWithholding.Add(afterWithholding)
+		totals.Net = totals.Net.Add(net)
+	}
+
+	groups := make([]securityMonthShareGroup, 0, len(groupsByKey))
+	for _, group := range groupsByKey {
+		groups = append(groups, *group)
+	}
+	sort.Slice(groups, func(i, j int) bool {
+		return securityMonthShareGroupLess(groups[i], groups[j])
+	})
+
+	rows := make([]SecurityMonthShareChartRow, 0, len(groups))
+	for _, group := range groups {
+		rows = append(rows, SecurityMonthShareChartRow{
+			SecurityID:                 group.SecurityID,
+			SecurityName:               group.SecurityName,
+			SecurityISIN:               group.SecurityISIN,
+			Gross:                      displayformat.DecimalForLocale(group.Gross.StringFixed(decimalPlaces), locale),
+			GrossPercentage:            percentString(group.Gross, totals.Gross),
+			AfterWithholding:           displayformat.DecimalForLocale(group.AfterWithholding.StringFixed(decimalPlaces), locale),
+			AfterWithholdingPercentage: percentString(group.AfterWithholding, totals.AfterWithholding),
+			Net:                        displayformat.DecimalForLocale(group.Net.StringFixed(decimalPlaces), locale),
+			NetPercentage:              percentString(group.Net, totals.Net),
+		})
+	}
+
+	return SecurityYearShareChartResponseData{
+		Year:     year,
 		Currency: currency,
 		Totals: SecurityMonthShareChartTotal{
 			Gross:            displayformat.DecimalForLocale(totals.Gross.StringFixed(decimalPlaces), locale),

@@ -337,6 +337,38 @@ func TestBuildDividendsBySecurityMonthShareChartDataRejectsInvalidDecimal(t *tes
 	}
 }
 
+func TestBuildDividendsBySecurityYearShareChartData(t *testing.T) {
+	data, ok := buildDividendsBySecurityYearShareChartData([]db.DividendsByYearSecuritySourceRow{
+		{Year: "2024", SecurityID: 2, SecurityName: "Example Beta AG", SecurityISIN: "DE000BETA01", Gross: "30.00", AfterWithholding: "24.00", Net: "20.00"},
+		{Year: "2024", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "50.00", AfterWithholding: "40.00", Net: "30.00"},
+		{Year: "2024", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "50.00", AfterWithholding: "36.00", Net: "25.00"},
+	}, 2, "EUR", "en-US", "2024")
+	if !ok {
+		t.Fatalf("buildDividendsBySecurityYearShareChartData() ok = false, want true")
+	}
+	if data.Year != "2024" || data.Currency != "EUR" {
+		t.Fatalf("year/currency = %+v, want 2024 EUR", data)
+	}
+	if data.Totals.Gross != "130.00" || data.Totals.AfterWithholding != "100.00" || data.Totals.Net != "75.00" {
+		t.Fatalf("totals = %+v, want 130.00/100.00/75.00", data.Totals)
+	}
+	if len(data.Rows) != 2 {
+		t.Fatalf("rows len = %d, want 2", len(data.Rows))
+	}
+
+	assertSecurityMonthShareChartRow(t, data.Rows[0], 1, "Example Alpha AG", "DE000ALPHA1", "100.00", "76.92", "76.00", "76.00", "55.00", "73.33")
+	assertSecurityMonthShareChartRow(t, data.Rows[1], 2, "Example Beta AG", "DE000BETA01", "30.00", "23.08", "24.00", "24.00", "20.00", "26.67")
+}
+
+func TestBuildDividendsBySecurityYearShareChartDataRejectsInvalidDecimal(t *testing.T) {
+	_, ok := buildDividendsBySecurityYearShareChartData([]db.DividendsByYearSecuritySourceRow{
+		{Year: "2024", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "bad", AfterWithholding: "40.00", Net: "30.00"},
+	}, 2, "EUR", "en-US", "2024")
+	if ok {
+		t.Fatalf("buildDividendsBySecurityYearShareChartData() ok = true, want false")
+	}
+}
+
 func TestYearChartResponseMarshalsValuesAsJSONNumbers(t *testing.T) {
 	response := YearChartResponse{
 		Success: true,
