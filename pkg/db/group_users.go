@@ -486,10 +486,10 @@ func (d *DB) ListGroupsWithRoleByUserID(userID int64) ([]GroupWithRole, error) {
 			UpdatedAt: g.UpdatedAt,
 		}
 	}
-	fmt.Println("Userid: ", userID)
-	fmt.Println(roleByGroup)
-	fmt.Println(memberships)
-	fmt.Println(out)
+	//fmt.Println("Userid: ", userID)
+	//fmt.Println(roleByGroup)
+	//fmt.Println(memberships)
+	//fmt.Println(out)
 	return out, nil
 }
 
