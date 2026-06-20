@@ -19,7 +19,8 @@ const (
 const (
 	RoleSystemAdmin = "admin"
 
-	RoleGroupAdmin = "admin"
+	RoleGroupAdmin  = "admin"
+	RoleGroupMember = "member"
 
 	RoleDepotOwner  = "owner"
 	RoleDepotEditor = "editor"
@@ -29,7 +30,7 @@ const (
 // ValidRoles lists the allowed roles per entity type.
 var ValidRoles = map[string][]string{
 	EntityTypeSystem: {RoleSystemAdmin},
-	EntityTypeGroup:  {RoleGroupAdmin},
+	EntityTypeGroup:  {RoleGroupAdmin, RoleGroupMember},
 	EntityTypeDepot:  {RoleDepotOwner, RoleDepotEditor, RoleDepotViewer},
 }
 
@@ -316,6 +317,64 @@ SELECT COUNT(*)
 `, EntityTypeGroup, groupID, RoleGroupAdmin).Scan(&count)
 	if err != nil {
 		return 0, fmt.Errorf("count group admins: %w", err)
+	}
+	return count, nil
+}
+
+// CountGroupMembershipsByUserID returns the number of groups a user belongs to.
+func (d *DB) CountGroupMembershipsByUserID(userID int64) (int, error) {
+	if d == nil || d.SQL == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	if userID <= 0 {
+		return 0, fmt.Errorf("userID must be > 0")
+	}
+
+	var count int
+	err := d.SQL.QueryRow(`
+SELECT COUNT(*)
+  FROM memberships
+ WHERE entity_type = ?
+   AND user_id     = ?;
+`, EntityTypeGroup, userID).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count group memberships by user: %w", err)
+	}
+	return count, nil
+}
+
+// CountActiveDepotsWhereUserIsSoleOwner returns how many active depots would
+// become orphaned if userID were deleted. The outer query looks only at active
+// depots where the user is an owner. The correlated subquery counts all owner
+// memberships for the same depot; if that count is exactly 1, this user is the
+// last remaining owner.
+func (d *DB) CountActiveDepotsWhereUserIsSoleOwner(userID int64) (int, error) {
+	if d == nil || d.SQL == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+	if userID <= 0 {
+		return 0, fmt.Errorf("userID must be > 0")
+	}
+
+	var count int
+	err := d.SQL.QueryRow(`
+SELECT COUNT(*)
+  FROM memberships m
+  JOIN depots d ON d.id = m.entity_id
+ WHERE m.entity_type = ?
+   AND m.user_id     = ?
+   AND m.role        = ?
+   AND d.status      = 'active'
+   AND (
+       SELECT COUNT(*)
+         FROM memberships owner
+        WHERE owner.entity_type = ?
+          AND owner.entity_id   = m.entity_id
+          AND owner.role        = ?
+   ) = 1;
+`, EntityTypeDepot, userID, RoleDepotOwner, EntityTypeDepot, RoleDepotOwner).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count active depots where user is sole owner: %w", err)
 	}
 	return count, nil
 }

@@ -164,10 +164,10 @@ func validateUserInlandTaxTemplate(template string) (string, bool) {
 }
 
 // canManageUser checks whether sessionUserID may perform action on users in groupID.
-// System-admin is checked first; if not, group-admin of the given group is checked.
+// System-admin sudo is checked only in the system context; otherwise group rights apply.
 // Returns (allowed, error).
-func (ct UsersController) canManageUser(sessionUserID int64, action string, groupID int64) (bool, error) {
-	ok, err := ct.G.Can(sessionUserID, action)
+func (ct UsersController) canManageUser(sessionUserID int64, contextGroupID int64, action string, groupID int64) (bool, error) {
+	ok, err := ct.G.CanWithContext(sessionUserID, contextGroupID, action)
 	if err != nil {
 		return false, err
 	}
@@ -177,7 +177,7 @@ func (ct UsersController) canManageUser(sessionUserID int64, action string, grou
 	if groupID <= 0 {
 		return false, nil
 	}
-	return ct.G.CanDo(sessionUserID, db.EntityTypeGroup, action, groupID)
+	return ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeGroup, action, groupID)
 }
 
 // parseUserID performs its package-specific operation.
@@ -188,6 +188,15 @@ func parseUserID(c *gin.Context) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func parseUsersContextGroupIDQuery(c *gin.Context) (int64, bool) {
+	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("context_group_id")), 10, 64)
+	if err != nil || groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return 0, false
+	}
+	return groupID, true
 }
 
 // GET /api/users/list
@@ -205,20 +214,41 @@ func (ct UsersController) GetList(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.Can(sessionUserID, "user:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+	contextGroupID, ok := parseUsersContextGroupIDQuery(c)
+	if !ok {
 		return
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	items, err := ct.DB.ListUsers(ctx)
+	var items []db.User
+	var err error
+	if contextGroupID == db.SystemGroupID {
+		allowed, err := ct.G.CanWithContext(sessionUserID, contextGroupID, "user:list")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
+
+		items, err = ct.DB.ListUsers(ctx)
+	} else {
+		allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeGroup, "user:list", contextGroupID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
+
+		items, err = ct.DB.ListUsersByGroupID(contextGroupID)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -257,7 +287,12 @@ func (ct UsersController) GetByID(c *gin.Context) {
 
 	// A user may always fetch their own profile.
 	if id != sessionUserID {
-		allowed, err := ct.G.Can(sessionUserID, "user:list")
+		contextGroupID, ok := parseUsersContextGroupIDQuery(c)
+		if !ok {
+			return
+		}
+
+		allowed, err := ct.G.CanWithContext(sessionUserID, contextGroupID, "user:list")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
@@ -317,7 +352,7 @@ func (ct UsersController) PostUpdate(c *gin.Context) {
 
 	// A user may always edit their own profile; otherwise requires user:edit permission.
 	if id != sessionUserID {
-		allowed, err := ct.canManageUser(sessionUserID, "user:edit", req.ContextGroupID)
+		allowed, err := ct.canManageUser(sessionUserID, req.ContextGroupID, "user:edit", req.ContextGroupID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
@@ -436,7 +471,7 @@ func (ct UsersController) PostUpdatePassword(c *gin.Context) {
 
 	// A user may always change their own password; otherwise requires user:edit permission.
 	if id != sessionUserID {
-		allowed, err := ct.canManageUser(sessionUserID, "user:edit", req.ContextGroupID)
+		allowed, err := ct.canManageUser(sessionUserID, req.ContextGroupID, "user:edit", req.ContextGroupID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
@@ -531,7 +566,7 @@ func (ct UsersController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.canManageUser(sessionUserID, "user:create", req.ContextGroupID)
+	allowed, err := ct.canManageUser(sessionUserID, req.ContextGroupID, "user:create", req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -600,7 +635,7 @@ func (ct UsersController) PostAdd(c *gin.Context) {
 	// Do not auto-assign to the system group — that is a privilege context,
 	// not an organisational one. The system admin must add the user explicitly.
 	if req.ContextGroupID != db.SystemGroupID {
-		if _, err := ct.DB.AddUserToGroup(req.ContextGroupID, newID); err != nil {
+		if _, err := ct.DB.AddGroupMember(req.ContextGroupID, newID, db.RoleGroupMember); err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
 		}
@@ -655,7 +690,7 @@ func (ct UsersController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.canManageUser(sessionUserID, "user:delete", req.ContextGroupID)
+	allowed, err := ct.canManageUser(sessionUserID, req.ContextGroupID, "user:delete", req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -667,6 +702,42 @@ func (ct UsersController) PostDelete(c *gin.Context) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+
+	if req.ContextGroupID != db.SystemGroupID {
+		inContextGroup, err := ct.DB.IsUserInGroup(req.ContextGroupID, id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !inContextGroup {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
+
+		groupCount, err := ct.DB.CountGroupMembershipsByUserID(id)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if groupCount == 0 {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
+		if groupCount > 1 {
+			c.JSON(http.StatusConflict, gin.H{"success": false, "message": "USER_IN_MULTIPLE_GROUPS"})
+			return
+		}
+	}
+
+	soleOwnerCount, err := ct.DB.CountActiveDepotsWhereUserIsSoleOwner(id)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if soleOwnerCount > 0 {
+		c.JSON(http.StatusConflict, gin.H{"success": false, "message": "USER_IS_SOLE_DEPOT_OWNER"})
+		return
+	}
 
 	deleted, err := ct.DB.DeleteUser(ctx, id)
 	if err != nil {

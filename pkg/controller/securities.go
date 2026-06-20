@@ -100,19 +100,19 @@ func (ct SecuritiesController) currentSessionUserID(c *gin.Context) (int64, bool
 	return id, true
 }
 
-// ensureGroupMember requires the current user to be a member of the active group context.
-func (ct SecuritiesController) ensureGroupMember(c *gin.Context, userID, groupID int64) bool {
+// ensureGroupPermission requires the requested group permission in the active context.
+func (ct SecuritiesController) ensureGroupPermission(c *gin.Context, userID, groupID int64, action string) bool {
 	if groupID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
 		return false
 	}
 
-	inGroup, err := ct.DB.IsUserInGroup(groupID, userID)
+	allowed, err := ct.G.CanDoWithContext(userID, groupID, db.EntityTypeGroup, action, groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return false
 	}
-	if !inGroup {
+	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return false
 	}
@@ -310,7 +310,7 @@ func (ct SecuritiesController) GetList(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureGroupMember(c, userID, groupID) {
+	if !ct.ensureGroupPermission(c, userID, groupID, "security:list") {
 		return
 	}
 
@@ -357,7 +357,7 @@ func (ct SecuritiesController) GetListAll(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureGroupMember(c, userID, groupID) {
+	if !ct.ensureGroupPermission(c, userID, groupID, "security:list") {
 		return
 	}
 
@@ -392,7 +392,7 @@ func (ct SecuritiesController) GetByID(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureGroupMember(c, userID, groupID) {
+	if !ct.ensureGroupPermission(c, userID, groupID, "security:list") {
 		return
 	}
 
@@ -437,7 +437,7 @@ func (ct SecuritiesController) PostAdd(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
 	}
-	if !ct.ensureGroupMember(c, userID, req.ContextGroupID) {
+	if !ct.ensureGroupPermission(c, userID, req.ContextGroupID, "security:add") {
 		return
 	}
 
@@ -494,7 +494,7 @@ func (ct SecuritiesController) PostUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
 	}
-	if !ct.ensureGroupMember(c, userID, req.ContextGroupID) {
+	if !ct.ensureGroupPermission(c, userID, req.ContextGroupID, "security:edit") {
 		return
 	}
 
@@ -576,7 +576,7 @@ func (ct SecuritiesController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(userID, db.EntityTypeGroup, "security:delete", req.ContextGroupID)
+	allowed, err := ct.G.CanDoWithContext(userID, req.ContextGroupID, db.EntityTypeGroup, "security:delete", req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

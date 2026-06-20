@@ -134,7 +134,7 @@ SELECT ?, currency, name, decimal_places, status, ?, ?
 }
 
 // CreateGroupWithDefaultCurrenciesAndAdmin creates a group, copies template currencies,
-// adds the creator to group_users, and grants the creator the group admin membership.
+// and grants the creator the group admin membership.
 func (d *DB) CreateGroupWithDefaultCurrenciesAndAdmin(g *Group, userID int64) error {
 	if d == nil || d.SQL == nil {
 		return fmt.Errorf("db not initialized")
@@ -179,14 +179,6 @@ SELECT ?, currency, name, decimal_places, status, ?, ?
   FROM currencies
  WHERE group_id = 0;
 `, id, now, now); err != nil {
-		return fmt.Errorf("create group with default currencies and admin: %w", err)
-	}
-
-	if _, err := tx.Exec(`
-INSERT INTO group_users (group_id, user_id)
-VALUES (?, ?)
-ON CONFLICT(group_id, user_id) DO NOTHING;
-`, id, userID); err != nil {
 		return fmt.Errorf("create group with default currencies and admin: %w", err)
 	}
 

@@ -11,12 +11,6 @@ import (
 // ErrLastGroupAdmin is returned when an operation would leave a group without an admin.
 var ErrLastGroupAdmin = errors.New("last group admin cannot be removed")
 
-// GroupUser represents a single row in the group_users join table.
-type GroupUser struct {
-	GroupID int64 `json:"GroupID"`
-	UserID  int64 `json:"UserID"`
-}
-
 // GroupMember represents a user in a group enriched with their group role.
 type GroupMember struct {
 	ID        int64  `json:"ID"`
@@ -30,37 +24,7 @@ type GroupMember struct {
 	UpdatedAt int64  `json:"UpdatedAt,omitempty"`
 }
 
-// AddUserToGroup adds a user to a group.
-// Returns true if a new row was inserted, false if already a member.
-func (d *DB) AddUserToGroup(groupID, userID int64) (bool, error) {
-	if d == nil || d.SQL == nil {
-		return false, fmt.Errorf("db not initialized")
-	}
-	if groupID <= 0 {
-		return false, fmt.Errorf("groupID must be > 0")
-	}
-	if userID <= 0 {
-		return false, fmt.Errorf("userID must be > 0")
-	}
-
-	res, err := d.SQL.Exec(`
-INSERT INTO group_users (group_id, user_id)
-VALUES (?, ?)
-ON CONFLICT(group_id, user_id) DO NOTHING;
-`, groupID, userID)
-	if err != nil {
-		return false, fmt.Errorf("add user to group: %w", err)
-	}
-
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("add user to group rows affected: %w", err)
-	}
-	return affected > 0, nil
-}
-
-// AddGroupMember adds a user to a group and sets or clears their explicit group role.
-// Empty role means plain group membership without a memberships row.
+// AddGroupMember adds a user to a group and sets their group role.
 func (d *DB) AddGroupMember(groupID, userID int64, role string) (bool, error) {
 	if d == nil || d.SQL == nil {
 		return false, fmt.Errorf("db not initialized")
@@ -72,7 +36,10 @@ func (d *DB) AddGroupMember(groupID, userID int64, role string) (bool, error) {
 		return false, fmt.Errorf("userID must be > 0")
 	}
 	role = strings.TrimSpace(role)
-	if role != "" && !IsValidGroupRole(role) {
+	if role == "" {
+		return false, fmt.Errorf("role is required")
+	}
+	if !IsValidGroupRole(role) {
 		return false, fmt.Errorf("invalid group role %q", role)
 	}
 
@@ -82,23 +49,8 @@ func (d *DB) AddGroupMember(groupID, userID int64, role string) (bool, error) {
 	}
 	defer func() { _ = tx.Rollback() }()
 
-	res, err := tx.Exec(`
-INSERT INTO group_users (group_id, user_id)
-VALUES (?, ?)
-ON CONFLICT(group_id, user_id) DO NOTHING;
-`, groupID, userID)
-	if err != nil {
-		return false, fmt.Errorf("add group member: %w", err)
-	}
-
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("add group member rows affected: %w", err)
-	}
-
-	if role == "" {
-		var currentRole string
-		err := tx.QueryRow(`
+	var currentRole string
+	err = tx.QueryRow(`
 SELECT role
   FROM memberships
  WHERE entity_type = ?
@@ -106,27 +58,33 @@ SELECT role
    AND user_id     = ?
  LIMIT 1;
 `, EntityTypeGroup, groupID, userID).Scan(&currentRole)
-		if err != nil && err != sql.ErrNoRows {
-			return false, fmt.Errorf("add group member current role: %w", err)
-		}
-		if currentRole == RoleGroupAdmin {
-			count, err := countGroupAdminsTx(tx, groupID)
-			if err != nil {
-				return false, err
-			}
-			if count <= 1 {
-				return false, ErrLastGroupAdmin
-			}
-		}
+	if err != nil && err != sql.ErrNoRows {
+		return false, fmt.Errorf("add group member current role: %w", err)
+	}
+	added := err == sql.ErrNoRows
 
-		if _, err := tx.Exec(`
-DELETE FROM memberships
- WHERE entity_type = ?
-   AND entity_id   = ?
-   AND user_id     = ?;
-`, EntityTypeGroup, groupID, userID); err != nil {
-			return false, fmt.Errorf("add group member clear role: %w", err)
+	if currentRole == RoleGroupAdmin && role == RoleGroupMember {
+		count, err := countGroupAdminsTx(tx, groupID)
+		if err != nil {
+			return false, err
 		}
+		if count <= 1 {
+			return false, ErrLastGroupAdmin
+		}
+	}
+
+	now := time.Now().Unix()
+	if _, err := tx.Exec(`
+INSERT INTO memberships (entity_type, entity_id, user_id, role, created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?)
+ON CONFLICT(entity_type, entity_id, user_id) DO UPDATE SET
+  role       = excluded.role,
+  updated_at = excluded.updated_at;
+`, EntityTypeGroup, groupID, userID, role, now, now); err != nil {
+		return false, fmt.Errorf("add group member grant role: %w", err)
+	}
+
+	if role == RoleGroupMember {
 		count, err := countGroupAdminsTx(tx, groupID)
 		if err != nil {
 			return false, err
@@ -134,56 +92,22 @@ DELETE FROM memberships
 		if count <= 0 {
 			return false, ErrLastGroupAdmin
 		}
-	} else {
-		now := time.Now().Unix()
-		if _, err := tx.Exec(`
-INSERT INTO memberships (entity_type, entity_id, user_id, role, created_at, updated_at)
-VALUES (?, ?, ?, ?, ?, ?)
-ON CONFLICT(entity_type, entity_id, user_id) DO UPDATE SET
-  role       = excluded.role,
-  updated_at = excluded.updated_at;
-`, EntityTypeGroup, groupID, userID, role, now, now); err != nil {
-			return false, fmt.Errorf("add group member grant role: %w", err)
-		}
 	}
 
 	if err := tx.Commit(); err != nil {
 		return false, fmt.Errorf("add group member commit: %w", err)
 	}
 
-	return affected > 0, nil
+	return added, nil
 }
 
 // RemoveUserFromGroup removes a user from a group.
-// Returns true if a row was deleted, false if not found.
+// Returns true if a membership was deleted, false if not found.
 func (d *DB) RemoveUserFromGroup(groupID, userID int64) (bool, error) {
-	if d == nil || d.SQL == nil {
-		return false, fmt.Errorf("db not initialized")
-	}
-	if groupID <= 0 {
-		return false, fmt.Errorf("groupID must be > 0")
-	}
-	if userID <= 0 {
-		return false, fmt.Errorf("userID must be > 0")
-	}
-
-	res, err := d.SQL.Exec(`
-DELETE FROM group_users
- WHERE group_id = ?
-   AND user_id  = ?;
-`, groupID, userID)
-	if err != nil {
-		return false, fmt.Errorf("remove user from group: %w", err)
-	}
-
-	affected, err := res.RowsAffected()
-	if err != nil {
-		return false, fmt.Errorf("remove user from group rows affected: %w", err)
-	}
-	return affected > 0, nil
+	return d.RemoveGroupMember(groupID, userID)
 }
 
-// RemoveGroupMember removes a user from group_users and clears their group membership role.
+// RemoveGroupMember removes a user's group membership.
 func (d *DB) RemoveGroupMember(groupID, userID int64) (bool, error) {
 	if d == nil || d.SQL == nil {
 		return false, fmt.Errorf("db not initialized")
@@ -210,7 +134,10 @@ SELECT role
    AND user_id     = ?
  LIMIT 1;
 `, EntityTypeGroup, groupID, userID).Scan(&currentRole)
-	if err != nil && err != sql.ErrNoRows {
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
 		return false, fmt.Errorf("remove group member current role: %w", err)
 	}
 	if currentRole == RoleGroupAdmin {
@@ -224,26 +151,18 @@ SELECT role
 	}
 
 	res, err := tx.Exec(`
-DELETE FROM group_users
- WHERE group_id = ?
-   AND user_id  = ?;
-`, groupID, userID)
+DELETE FROM memberships
+ WHERE entity_type = ?
+   AND entity_id   = ?
+   AND user_id     = ?;
+`, EntityTypeGroup, groupID, userID)
 	if err != nil {
-		return false, fmt.Errorf("remove group member: %w", err)
+		return false, fmt.Errorf("remove group member role: %w", err)
 	}
 
 	affected, err := res.RowsAffected()
 	if err != nil {
 		return false, fmt.Errorf("remove group member rows affected: %w", err)
-	}
-
-	if _, err := tx.Exec(`
-DELETE FROM memberships
- WHERE entity_type = ?
-   AND entity_id   = ?
-   AND user_id     = ?;
-`, EntityTypeGroup, groupID, userID); err != nil {
-		return false, fmt.Errorf("remove group member role: %w", err)
 	}
 
 	if err := tx.Commit(); err != nil {
@@ -283,11 +202,12 @@ func (d *DB) IsUserInGroup(groupID, userID int64) (bool, error) {
 	var one int
 	err := d.SQL.QueryRow(`
 SELECT 1
-  FROM group_users
- WHERE group_id = ?
-   AND user_id  = ?
+  FROM memberships
+ WHERE entity_type = ?
+   AND entity_id   = ?
+   AND user_id     = ?
  LIMIT 1;
-`, groupID, userID).Scan(&one)
+`, EntityTypeGroup, groupID, userID).Scan(&one)
 	if err == sql.ErrNoRows {
 		return false, nil
 	}
@@ -309,10 +229,11 @@ func (d *DB) ListGroupsByUserID(userID int64) ([]Group, error) {
 	rows, err := d.SQL.Query(`
 SELECT g.id, g.name, g.created_at, g.updated_at
   FROM groups g
-  JOIN group_users gu ON gu.group_id = g.id
- WHERE gu.user_id = ?
+  JOIN memberships m ON m.entity_type = ?
+                    AND m.entity_id   = g.id
+ WHERE m.user_id = ?
  ORDER BY g.id ASC;
-`, userID)
+`, EntityTypeGroup, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list groups by user: %w", err)
 	}
@@ -350,10 +271,11 @@ func (d *DB) ListUsersByGroupID(groupID int64) ([]User, error) {
 	rows, err := d.SQL.Query(`
 SELECT u.id, u.firstname, u.lastname, u.email, u.locale, u.status, u.created_at, u.updated_at
   FROM users u
-  JOIN group_users gu ON gu.user_id = u.id
- WHERE gu.group_id = ?
+  JOIN memberships m ON m.entity_type = ?
+                    AND m.user_id     = u.id
+ WHERE m.entity_id = ?
  ORDER BY u.id ASC;
-`, groupID)
+`, EntityTypeGroup, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("list users by group: %w", err)
 	}
@@ -384,7 +306,7 @@ SELECT u.id, u.firstname, u.lastname, u.email, u.locale, u.status, u.created_at,
 }
 
 // ListGroupMembersByGroupID returns all users belonging to the given group
-// enriched with their explicit group role, if any.
+// enriched with their group role.
 func (d *DB) ListGroupMembersByGroupID(groupID int64) ([]GroupMember, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
@@ -400,15 +322,13 @@ SELECT u.id,
        u.email,
        u.locale,
        u.status,
-       COALESCE(m.role, '') AS role,
+       m.role,
        u.created_at,
        u.updated_at
   FROM users u
-  JOIN group_users gu ON gu.user_id = u.id
-  LEFT JOIN memberships m ON m.entity_type = ?
-                          AND m.entity_id   = gu.group_id
-                          AND m.user_id     = u.id
- WHERE gu.group_id = ?
+  JOIN memberships m ON m.entity_type = ?
+                    AND m.entity_id   = ?
+                    AND m.user_id     = u.id
  ORDER BY u.id ASC;
 `, EntityTypeGroup, groupID)
 	if err != nil {
@@ -441,8 +361,7 @@ SELECT u.id,
 	return out, nil
 }
 
-// GroupWithRole combines group data with the user's role in that group (from memberships).
-// Role is empty if no explicit membership entry exists.
+// GroupWithRole combines group data with the user's role in that group.
 type GroupWithRole struct {
 	ID        int64  `json:"ID"`
 	Name      string `json:"Name"`
@@ -452,7 +371,7 @@ type GroupWithRole struct {
 }
 
 // ListGroupsWithRoleByUserID returns all groups the user belongs to, enriched with
-// the user's role from the memberships table (entity_type='group').
+// the user's group role from memberships.
 func (d *DB) ListGroupsWithRoleByUserID(userID int64) ([]GroupWithRole, error) {
 	groups, err := d.ListGroupsByUserID(userID)
 	if err != nil {
@@ -471,7 +390,7 @@ func (d *DB) ListGroupsWithRoleByUserID(userID int64) ([]GroupWithRole, error) {
 			roleByGroup[m.EntityID] = m.Role
 		case m.EntityType == EntityTypeSystem && m.EntityID == SystemGroupID:
 			// System-admin membership is stored under entity_type='system',
-			// but the system group (id=1) still appears in group_users.
+			// but is shown as the role for the reserved system group.
 			roleByGroup[SystemGroupID] = m.Role
 		}
 	}
@@ -490,36 +409,5 @@ func (d *DB) ListGroupsWithRoleByUserID(userID int64) ([]GroupWithRole, error) {
 	//fmt.Println(roleByGroup)
 	//fmt.Println(memberships)
 	//fmt.Println(out)
-	return out, nil
-}
-
-// ListAllGroupUsers returns all group_user rows. Intended for full-database exports.
-func (d *DB) ListAllGroupUsers() ([]GroupUser, error) {
-	if d == nil || d.SQL == nil {
-		return nil, fmt.Errorf("db not initialized")
-	}
-
-	rows, err := d.SQL.Query(`
-SELECT group_id, user_id
-  FROM group_users
- ORDER BY group_id, user_id ASC;
-`)
-	if err != nil {
-		return nil, fmt.Errorf("list all group users: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]GroupUser, 0)
-	for rows.Next() {
-		var gu GroupUser
-		if err := rows.Scan(&gu.GroupID, &gu.UserID); err != nil {
-			return nil, fmt.Errorf("scan group user: %w", err)
-		}
-		out = append(out, gu)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate group users: %w", err)
-	}
-
 	return out, nil
 }

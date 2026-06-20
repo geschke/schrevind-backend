@@ -412,6 +412,8 @@ func (ct AnalysesController) loadDecimalPlacesForBaseCurrency(groupID int64, bas
 	return decimalPlaces, true
 }
 
+// ensureAnalysisGroupMember only validates the active group context.
+// The actual data scope for analyses is controlled by depot entries:list rights.
 func (ct AnalysesController) ensureAnalysisGroupMember(c *gin.Context, userID, groupID int64) bool {
 	member, err := ct.DB.IsUserInGroup(groupID, userID)
 	if err != nil {
@@ -447,7 +449,7 @@ func (ct AnalysesController) GetDividendsByYearData(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -457,7 +459,7 @@ func (ct AnalysesController) GetDividendsByYearData(c *gin.Context) {
 		return
 	}
 
-	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -547,7 +549,7 @@ func (ct AnalysesController) GetDividendsByYearMonthData(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -557,7 +559,7 @@ func (ct AnalysesController) GetDividendsByYearMonthData(c *gin.Context) {
 		return
 	}
 
-	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -684,7 +686,7 @@ func (ct AnalysesController) GetDividendsBySecurityYearData(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -694,7 +696,7 @@ func (ct AnalysesController) GetDividendsBySecurityYearData(c *gin.Context) {
 		return
 	}
 
-	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -803,7 +805,7 @@ func (ct AnalysesController) PostDividendsByYearMonthSecurityData(c *gin.Context
 		return
 	}
 
-	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -813,7 +815,7 @@ func (ct AnalysesController) PostDividendsByYearMonthSecurityData(c *gin.Context
 		return
 	}
 
-	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -903,7 +905,7 @@ func (ct AnalysesController) GetDividendsByYearChart(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -913,7 +915,7 @@ func (ct AnalysesController) GetDividendsByYearChart(c *gin.Context) {
 		return
 	}
 
-	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -993,7 +995,7 @@ func (ct AnalysesController) GetDividendsByYearMonthChart(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1003,7 +1005,7 @@ func (ct AnalysesController) GetDividendsByYearMonthChart(c *gin.Context) {
 		return
 	}
 
-	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1088,7 +1090,7 @@ func (ct AnalysesController) GetDividendsBySecurityMonthShareChart(c *gin.Contex
 		return
 	}
 
-	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1098,7 +1100,7 @@ func (ct AnalysesController) GetDividendsBySecurityMonthShareChart(c *gin.Contex
 		return
 	}
 
-	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1197,7 +1199,7 @@ func (ct AnalysesController) GetDividendsBySecurityYearShareChart(c *gin.Context
 		return
 	}
 
-	allowed, err := ct.G.CanDoAny(userID, db.EntityTypeDepot, "entries:list")
+	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1207,7 +1209,7 @@ func (ct AnalysesController) GetDividendsBySecurityYearShareChart(c *gin.Context
 		return
 	}
 
-	scope, err := ct.G.ScopeForAction(userID, db.EntityTypeDepot, "entries:list")
+	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

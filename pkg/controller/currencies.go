@@ -217,14 +217,19 @@ func normalizeCurrencyPayload(item db.Currency) (db.Currency, string) {
 	return item, ""
 }
 
-// ensureGroupMember requires that the current user belongs to the requested group.
-func (ct CurrenciesController) ensureGroupMember(c *gin.Context, userID, groupID int64) bool {
-	member, err := ct.DB.IsUserInGroup(groupID, userID)
+// ensureGroupPermission requires the requested group permission in the active context.
+func (ct CurrenciesController) ensureGroupPermission(c *gin.Context, userID, groupID int64, action string) bool {
+	if groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return false
+	}
+
+	allowed, err := ct.G.CanDoWithContext(userID, groupID, db.EntityTypeGroup, action, groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return false
 	}
-	if !member {
+	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return false
 	}
@@ -252,7 +257,7 @@ func (ct CurrenciesController) GetList(c *gin.Context) {
 		return
 	}
 
-	if !ct.ensureGroupMember(c, userID, groupID) {
+	if !ct.ensureGroupPermission(c, userID, groupID, "currency:list") {
 		return
 	}
 
@@ -300,7 +305,7 @@ func (ct CurrenciesController) GetByID(c *gin.Context) {
 		return
 	}
 
-	if !ct.ensureGroupMember(c, userID, groupID) {
+	if !ct.ensureGroupPermission(c, userID, groupID, "currency:list") {
 		return
 	}
 
@@ -358,7 +363,7 @@ func (ct CurrenciesController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	if !ct.ensureGroupMember(c, userID, item.GroupID) {
+	if !ct.ensureGroupPermission(c, userID, item.GroupID, "currency:add") {
 		return
 	}
 
@@ -413,7 +418,7 @@ func (ct CurrenciesController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	if !ct.ensureGroupMember(c, userID, req.ContextGroupID) {
+	if !ct.ensureGroupPermission(c, userID, req.ContextGroupID, "currency:edit") {
 		return
 	}
 
@@ -509,7 +514,7 @@ func (ct CurrenciesController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(userID, db.EntityTypeGroup, "currency:delete", req.ContextGroupID)
+	allowed, err := ct.G.CanDoWithContext(userID, req.ContextGroupID, db.EntityTypeGroup, "currency:delete", req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

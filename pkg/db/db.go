@@ -93,18 +93,6 @@ CREATE TABLE IF NOT EXISTS groups (
 		`INSERT OR IGNORE INTO groups (id, name, created_at, updated_at) VALUES (1, 'System', 0, 0);`,
 
 		`
-CREATE TABLE IF NOT EXISTS group_users (
-  group_id   INTEGER NOT NULL,
-  user_id    INTEGER NOT NULL,
-  PRIMARY KEY (group_id, user_id),
-  FOREIGN KEY(group_id) REFERENCES groups(id),
-  FOREIGN KEY(user_id)  REFERENCES users(id)
-);
-`,
-		`CREATE INDEX IF NOT EXISTS idx_group_users_user_id ON group_users(user_id);`,
-		`CREATE INDEX IF NOT EXISTS idx_group_users_group_id ON group_users(group_id);`,
-
-		`
 CREATE TABLE IF NOT EXISTS memberships (
   entity_type  TEXT    NOT NULL,
   entity_id    INTEGER NOT NULL,

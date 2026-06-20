@@ -278,10 +278,11 @@ func (d *DB) ListDepotsByGroupID(groupID int64) ([]Depot, error) {
 SELECT DISTINCT d.id, d.name, d.broker_name, d.account_number, d.base_currency, d.description, d.status, d.created_at, d.updated_at
   FROM depots d
   JOIN memberships m ON m.entity_type = ? AND m.entity_id = d.id
-  JOIN group_users gu ON gu.user_id = m.user_id
- WHERE gu.group_id = ?
+  JOIN memberships gm ON gm.entity_type = ?
+                     AND gm.entity_id   = ?
+                     AND gm.user_id     = m.user_id
  ORDER BY d.id ASC;
-`, EntityTypeDepot, groupID)
+`, EntityTypeDepot, EntityTypeGroup, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("list depots by group: %w", err)
 	}

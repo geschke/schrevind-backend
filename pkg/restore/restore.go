@@ -154,7 +154,6 @@ func Run(database *db.DB, doc *export.ExportDoc) error {
 		`DELETE FROM dividend_entries;`,
 		`DELETE FROM withholding_tax_defaults;`,
 		`DELETE FROM memberships;`,
-		`DELETE FROM group_users;`,
 		`DELETE FROM depots;`,
 		`DELETE FROM users;`,
 		`DELETE FROM securities;`,
@@ -199,17 +198,7 @@ VALUES (?, ?, ?, ?);
 		}
 	}
 
-	// 3. Insert group_users.
-	for _, gu := range doc.Data.GroupUsers {
-		if _, err := tx.Exec(`
-INSERT INTO group_users (group_id, user_id)
-VALUES (?, ?);
-`, gu.GroupID, gu.UserID); err != nil {
-			return fmt.Errorf("IMPORT_FAILED: insert group_user group_id=%d user_id=%d: %w", gu.GroupID, gu.UserID, err)
-		}
-	}
-
-	// 4. Insert depots.
+	// 3. Insert depots.
 	for _, d := range doc.Data.Depots {
 		if _, err := tx.Exec(`
 INSERT INTO depots (id, name, broker_name, account_number, base_currency, description, status, created_at, updated_at)
@@ -219,7 +208,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 		}
 	}
 
-	// 5. Insert securities.
+	// 4. Insert securities.
 	for _, s := range doc.Data.Securities {
 		if _, err := tx.Exec(`
 INSERT INTO securities (id, group_id, name, isin, wkn, symbol, status, created_at, updated_at)
@@ -229,7 +218,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 		}
 	}
 
-	// 6. Insert currencies.
+	// 5. Insert currencies.
 	for _, c := range doc.Data.Currencies {
 		if _, err := tx.Exec(`
 INSERT INTO currencies (id, group_id, currency, name, decimal_places, status, created_at, updated_at)
@@ -239,7 +228,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?);
 		}
 	}
 
-	// 7. Insert withholding_tax_defaults (depot_id = 0 means group fallback).
+	// 6. Insert withholding_tax_defaults (depot_id = 0 means group fallback).
 	for _, w := range doc.Data.WithholdingTaxDefaults {
 		if _, err := tx.Exec(`
 INSERT INTO withholding_tax_defaults (id, group_id, depot_id, country_code, country_name, withholding_tax_percent_default, withholding_tax_percent_credit_default, created_at, updated_at)
@@ -249,7 +238,7 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
 		}
 	}
 
-	// 8. Insert memberships.
+	// 7. Insert memberships.
 	for _, m := range doc.Data.Memberships {
 		if _, err := tx.Exec(`
 INSERT INTO memberships (entity_type, entity_id, user_id, role, created_at, updated_at)
@@ -259,7 +248,7 @@ VALUES (?, ?, ?, ?, ?, ?);
 		}
 	}
 
-	// 9. Insert dividend_entries (references depots and securities).
+	// 8. Insert dividend_entries (references depots and securities).
 	for _, e := range doc.Data.DividendEntries {
 		inlandTaxDetails, err := db.EncodeInlandTaxDetails(e.InlandTaxDetails)
 		if err != nil {

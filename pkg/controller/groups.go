@@ -37,11 +37,17 @@ func (ct GroupsController) Options(c *gin.Context) {
 }
 
 type addGroupRequest struct {
-	Name string `json:"Name"`
+	ContextGroupID int64  `json:"ContextGroupID"`
+	Name           string `json:"Name"`
 }
 
 type updateGroupRequest struct {
-	Name *string `json:"Name"`
+	ContextGroupID int64   `json:"ContextGroupID"`
+	Name           *string `json:"Name"`
+}
+
+type deleteGroupRequest struct {
+	ContextGroupID int64 `json:"ContextGroupID"`
 }
 
 type groupMemberAddRequest struct {
@@ -110,31 +116,27 @@ func parseGroupID(c *gin.Context) (int64, bool) {
 	return id, true
 }
 
+func parseGroupContextGroupIDQuery(c *gin.Context) (int64, bool) {
+	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("context_group_id")), 10, 64)
+	if err != nil || groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return 0, false
+	}
+	return groupID, true
+}
+
 func (ct GroupsController) ensureMemberActionContext(c *gin.Context, sessionUserID, contextGroupID int64, action string) bool {
 	if contextGroupID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
 		return false
 	}
 
-	if contextGroupID == db.SystemGroupID {
-		allowed, err := ct.G.Can(sessionUserID, action)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-			return false
-		}
-		if !allowed {
-			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_CONTEXT_GROUP"})
-			return false
-		}
-		return true
-	}
-
-	inGroup, err := ct.DB.IsUserInGroup(contextGroupID, sessionUserID)
+	allowed, err := ct.G.ContextGroupAllowed(sessionUserID, contextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return false
 	}
-	if !inGroup {
+	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_CONTEXT_GROUP"})
 		return false
 	}
@@ -217,17 +219,38 @@ func (ct GroupsController) GetList(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.Can(sessionUserID, "group:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+	contextGroupID, ok := parseGroupContextGroupIDQuery(c)
+	if !ok {
 		return
 	}
 
-	items, err := ct.DB.ListGroups()
+	var items []db.Group
+	var err error
+	if contextGroupID == db.SystemGroupID {
+		allowed, err := ct.G.CanWithContext(sessionUserID, contextGroupID, "group:list")
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
+
+		items, err = ct.DB.ListGroups()
+	} else {
+		allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeGroup, "group:list:accessible", contextGroupID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+			return
+		}
+
+		items, err = ct.DB.ListGroupsByUserID(sessionUserID)
+	}
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -260,7 +283,12 @@ func (ct GroupsController) GetByID(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "group:view", groupID)
+	contextGroupID, ok := parseGroupContextGroupIDQuery(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeGroup, "group:view", groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -301,19 +329,23 @@ func (ct GroupsController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.Can(sessionUserID, "group:create")
+	var req addGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	allowed, err := ct.G.CanWithContext(sessionUserID, req.ContextGroupID, "group:create")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	var req addGroupRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
 	}
 
@@ -362,7 +394,17 @@ func (ct GroupsController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "group:edit", groupID)
+	var req updateGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeGroup, "group:edit", groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -379,12 +421,6 @@ func (ct GroupsController) PostUpdate(c *gin.Context) {
 	}
 	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "GROUP_NOT_FOUND"})
-		return
-	}
-
-	var req updateGroupRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
 	}
 
@@ -435,7 +471,17 @@ func (ct GroupsController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "group:delete", groupID)
+	var req deleteGroupRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeGroup, "group:delete", groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -484,7 +530,12 @@ func (ct GroupsController) GetMembers(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "member:list", groupID)
+	contextGroupID, ok := parseGroupContextGroupIDQuery(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeGroup, "member:list", groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -541,7 +592,7 @@ func (ct GroupsController) PostMemberAdd(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "member:add", targetGroupID)
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeGroup, "member:add", targetGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -554,6 +605,9 @@ func (ct GroupsController) PostMemberAdd(c *gin.Context) {
 	seen := make(map[int64]struct{}, len(req.Members))
 	for i := range req.Members {
 		req.Members[i].Role = strings.TrimSpace(req.Members[i].Role)
+		if req.Members[i].Role == "" {
+			req.Members[i].Role = db.RoleGroupMember
+		}
 		if req.Members[i].UserID <= 0 {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
 			return
@@ -563,7 +617,7 @@ func (ct GroupsController) PostMemberAdd(c *gin.Context) {
 			return
 		}
 		seen[req.Members[i].UserID] = struct{}{}
-		if req.Members[i].Role != "" && !db.IsValidGroupRole(req.Members[i].Role) {
+		if !db.IsValidGroupRole(req.Members[i].Role) {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_ROLE"})
 			return
 		}
@@ -674,7 +728,7 @@ func (ct GroupsController) PostMemberRemove(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "member:remove", targetGroupID)
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeGroup, "member:remove", targetGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -752,7 +806,12 @@ func (ct GroupsController) GetDepots(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "depot:list", groupID)
+	contextGroupID, ok := parseGroupContextGroupIDQuery(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeGroup, "depot:list", groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

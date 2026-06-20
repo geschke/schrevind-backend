@@ -98,19 +98,19 @@ func (ct WithholdingTaxDefaultsController) currentSessionUserID(c *gin.Context) 
 	return id, true
 }
 
-// ensureGroupMember requires the current user to be a member of the active group context.
-func (ct WithholdingTaxDefaultsController) ensureGroupMember(c *gin.Context, userID, groupID int64) bool {
+// ensureGroupPermission requires the requested group permission in the active context.
+func (ct WithholdingTaxDefaultsController) ensureGroupPermission(c *gin.Context, userID, groupID int64, action string) bool {
 	if groupID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
 		return false
 	}
 
-	inGroup, err := ct.DB.IsUserInGroup(groupID, userID)
+	allowed, err := ct.G.CanDoWithContext(userID, groupID, db.EntityTypeGroup, action, groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return false
 	}
-	if !inGroup {
+	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return false
 	}
@@ -118,9 +118,9 @@ func (ct WithholdingTaxDefaultsController) ensureGroupMember(c *gin.Context, use
 	return true
 }
 
-// ensureCanEditWithholdingTaxDefault verifies group membership and depot edit rights when depot-scoped.
-func (ct WithholdingTaxDefaultsController) ensureCanEditWithholdingTaxDefault(c *gin.Context, userID int64, item db.WithholdingTaxDefault) bool {
-	if !ct.ensureGroupMember(c, userID, item.GroupID) {
+// ensureCanWriteWithholdingTaxDefault verifies group rights and depot edit rights when depot-scoped.
+func (ct WithholdingTaxDefaultsController) ensureCanWriteWithholdingTaxDefault(c *gin.Context, userID int64, item db.WithholdingTaxDefault, groupAction string) bool {
+	if !ct.ensureGroupPermission(c, userID, item.GroupID, groupAction) {
 		return false
 	}
 
@@ -128,7 +128,7 @@ func (ct WithholdingTaxDefaultsController) ensureCanEditWithholdingTaxDefault(c 
 		return true
 	}
 
-	allowed, err := ct.G.CanDo(userID, db.EntityTypeDepot, "withholding-tax-default:edit", item.DepotID)
+	allowed, err := ct.G.CanDoWithContext(userID, item.GroupID, db.EntityTypeDepot, "withholding-tax-default:edit", item.DepotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return false
@@ -228,7 +228,7 @@ func (ct WithholdingTaxDefaultsController) GetList(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureGroupMember(c, userID, groupID) {
+	if !ct.ensureGroupPermission(c, userID, groupID, "withholding-tax-default:list") {
 		return
 	}
 
@@ -263,7 +263,7 @@ func (ct WithholdingTaxDefaultsController) GetListByDepot(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureGroupMember(c, userID, groupID) {
+	if !ct.ensureGroupPermission(c, userID, groupID, "withholding-tax-default:list") {
 		return
 	}
 
@@ -303,7 +303,7 @@ func (ct WithholdingTaxDefaultsController) GetEffective(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureGroupMember(c, userID, groupID) {
+	if !ct.ensureGroupPermission(c, userID, groupID, "withholding-tax-default:list") {
 		return
 	}
 
@@ -352,7 +352,7 @@ func (ct WithholdingTaxDefaultsController) GetByID(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureGroupMember(c, userID, groupID) {
+	if !ct.ensureGroupPermission(c, userID, groupID, "withholding-tax-default:list") {
 		return
 	}
 
@@ -410,7 +410,7 @@ func (ct WithholdingTaxDefaultsController) PostAdd(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": message})
 		return
 	}
-	if !ct.ensureCanEditWithholdingTaxDefault(c, userID, item) {
+	if !ct.ensureCanWriteWithholdingTaxDefault(c, userID, item, "withholding-tax-default:add") {
 		return
 	}
 
@@ -487,7 +487,7 @@ func (ct WithholdingTaxDefaultsController) PostUpdate(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": message})
 		return
 	}
-	if !ct.ensureCanEditWithholdingTaxDefault(c, userID, updated) {
+	if !ct.ensureCanWriteWithholdingTaxDefault(c, userID, updated, "withholding-tax-default:edit") {
 		return
 	}
 
@@ -532,7 +532,7 @@ func (ct WithholdingTaxDefaultsController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(userID, db.EntityTypeGroup, "withholding-tax-default:delete", req.ContextGroupID)
+	allowed, err := ct.G.CanDoWithContext(userID, req.ContextGroupID, db.EntityTypeGroup, "withholding-tax-default:delete", req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

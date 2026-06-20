@@ -48,26 +48,34 @@ type addDepotRequest struct {
 }
 
 type updateDepotRequest struct {
-	Name          *string `json:"Name"`
-	BrokerName    *string `json:"BrokerName"`
-	AccountNumber *string `json:"AccountNumber"`
-	BaseCurrency  *string `json:"BaseCurrency"`
-	Description   *string `json:"Description"`
-	Status        *string `json:"Status"`
+	ContextGroupID int64   `json:"ContextGroupID"`
+	Name           *string `json:"Name"`
+	BrokerName     *string `json:"BrokerName"`
+	AccountNumber  *string `json:"AccountNumber"`
+	BaseCurrency   *string `json:"BaseCurrency"`
+	Description    *string `json:"Description"`
+	Status         *string `json:"Status"`
+}
+
+type deleteDepotRequest struct {
+	ContextGroupID int64 `json:"ContextGroupID"`
 }
 
 type depotAccessAddRequest struct {
-	UserID int64  `json:"UserID"`
-	Role   string `json:"Role"`
+	ContextGroupID int64  `json:"ContextGroupID"`
+	UserID         int64  `json:"UserID"`
+	Role           string `json:"Role"`
 }
 
 type depotAccessRemoveRequest struct {
-	UserID int64 `json:"UserID"`
+	ContextGroupID int64 `json:"ContextGroupID"`
+	UserID         int64 `json:"UserID"`
 }
 
 type depotAccessChangeRequest struct {
-	UserID int64  `json:"UserID"`
-	Role   string `json:"Role"`
+	ContextGroupID int64  `json:"ContextGroupID"`
+	UserID         int64  `json:"UserID"`
+	Role           string `json:"Role"`
 }
 
 // ensureAuthorized performs its package-specific operation.
@@ -119,6 +127,15 @@ func parseDepotID(c *gin.Context) (int64, bool) {
 		return 0, false
 	}
 	return id, true
+}
+
+func parseDepotContextGroupIDQuery(c *gin.Context) (int64, bool) {
+	groupID, err := strconv.ParseInt(strings.TrimSpace(c.Query("context_group_id")), 10, 64)
+	if err != nil || groupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return 0, false
+	}
+	return groupID, true
 }
 
 // isValidDepotStatus performs its package-specific operation.
@@ -181,6 +198,20 @@ func (ct DepotsController) GetList(c *gin.Context) {
 		return
 	}
 
+	contextGroupID, ok := parseDepotContextGroupIDQuery(c)
+	if !ok {
+		return
+	}
+	allowed, err := ct.G.ContextGroupAllowed(userID, contextGroupID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
 	items, err := ct.DB.ListDepotsByUserMembership(userID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
@@ -224,7 +255,12 @@ func (ct DepotsController) GetByID(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:list", depotID)
+	contextGroupID, ok := parseDepotContextGroupIDQuery(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list", depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -266,7 +302,7 @@ func (ct DepotsController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeGroup, "depot:create", req.ContextGroupID)
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeGroup, "depot:create", req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -348,19 +384,23 @@ func (ct DepotsController) PostUpdate(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:rename", depotID)
+	var req updateDepotRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeDepot, "depot:rename", depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
-		return
-	}
-
-	var req updateDepotRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
 		return
 	}
 
@@ -438,7 +478,17 @@ func (ct DepotsController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:delete", depotID)
+	var req deleteDepotRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeDepot, "depot:delete", depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -486,7 +536,12 @@ func (ct DepotsController) GetAccess(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:access:list", depotID)
+	contextGroupID, ok := parseDepotContextGroupIDQuery(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "depot:access:list", depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -529,7 +584,17 @@ func (ct DepotsController) PostAccessAdd(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:access:add", depotID)
+	var req depotAccessAddRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeDepot, "depot:access:add", depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -539,11 +604,6 @@ func (ct DepotsController) PostAccessAdd(c *gin.Context) {
 		return
 	}
 
-	var req depotAccessAddRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
-		return
-	}
 	if req.UserID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
 		return
@@ -597,7 +657,17 @@ func (ct DepotsController) PostAccessRemove(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:access:remove", depotID)
+	var req depotAccessRemoveRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeDepot, "depot:access:remove", depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -607,11 +677,6 @@ func (ct DepotsController) PostAccessRemove(c *gin.Context) {
 		return
 	}
 
-	var req depotAccessRemoveRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
-		return
-	}
 	if req.UserID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
 		return
@@ -683,7 +748,17 @@ func (ct DepotsController) PostAccessChange(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "depot:access:change", depotID)
+	var req depotAccessChangeRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
+		return
+	}
+	if req.ContextGroupID <= 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeDepot, "depot:access:change", depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -693,11 +768,6 @@ func (ct DepotsController) PostAccessChange(c *gin.Context) {
 		return
 	}
 
-	var req depotAccessChangeRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_JSON"})
-		return
-	}
 	if req.UserID <= 0 {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_USER_ID"})
 		return

@@ -38,7 +38,6 @@ type ExportDoc struct {
 type ExportData struct {
 	Users                  []db.User                  `json:"users"`
 	Groups                 []db.Group                 `json:"groups"`
-	GroupUsers             []db.GroupUser             `json:"group_users"`
 	Memberships            []db.Membership            `json:"memberships"`
 	Depots                 []db.Depot                 `json:"depots"`
 	Securities             []db.Security              `json:"securities"`
@@ -69,11 +68,6 @@ func buildExportJSON(database *db.DB) ([]byte, error) {
 	groups, err := database.ListGroups()
 	if err != nil {
 		return nil, fmt.Errorf("export groups: %w", err)
-	}
-
-	groupUsers, err := database.ListAllGroupUsers()
-	if err != nil {
-		return nil, fmt.Errorf("export group_users: %w", err)
 	}
 
 	memberships, err := database.ListAllMemberships()
@@ -113,7 +107,6 @@ func buildExportJSON(database *db.DB) ([]byte, error) {
 		Data: ExportData{
 			Users:                  users,
 			Groups:                 groups,
-			GroupUsers:             groupUsers,
 			Memberships:            memberships,
 			Depots:                 depots,
 			Securities:             securities,

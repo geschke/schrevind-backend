@@ -1264,7 +1264,12 @@ func (ct DividendEntriesController) GetByID(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:list", item.DepotID)
+	contextGroupID, ok := parseDividendEntryContextGroupID(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list", item.DepotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1321,7 +1326,12 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAny(sessionUserID, db.EntityTypeDepot, "entries:list")
+	contextGroupID, ok := parseDividendEntryContextGroupID(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoAnyWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1331,7 +1341,7 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 		return
 	}
 
-	scope, err := ct.G.ScopeForAction(sessionUserID, db.EntityTypeDepot, "entries:list")
+	scope, err := ct.G.ScopeForActionWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1396,10 +1406,14 @@ func (ct DividendEntriesController) GetTimeRange(c *gin.Context) {
 	if !ok {
 		return
 	}
+	contextGroupID, ok := parseDividendEntryContextGroupID(c)
+	if !ok {
+		return
+	}
 
 	timeRange := db.DividendEntryTimeRange{}
 	if depotID > 0 {
-		allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:list", depotID)
+		allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list", depotID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
@@ -1418,7 +1432,7 @@ func (ct DividendEntriesController) GetTimeRange(c *gin.Context) {
 			timeRange = foundRange
 		}
 	} else {
-		allowed, err := ct.G.CanDoAny(sessionUserID, db.EntityTypeDepot, "entries:list")
+		allowed, err := ct.G.CanDoAnyWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
@@ -1428,7 +1442,7 @@ func (ct DividendEntriesController) GetTimeRange(c *gin.Context) {
 			return
 		}
 
-		scope, err := ct.G.ScopeForAction(sessionUserID, db.EntityTypeDepot, "entries:list")
+		scope, err := ct.G.ScopeForActionWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list")
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
@@ -1480,7 +1494,12 @@ func (ct DividendEntriesController) GetListByDepot(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:list", depotID)
+	contextGroupID, ok := parseDividendEntryContextGroupID(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list", depotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1575,7 +1594,7 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAny(sessionUserID, db.EntityTypeDepot, "entries:list")
+	allowed, err := ct.G.CanDoAnyWithContext(sessionUserID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1585,7 +1604,7 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		return
 	}
 
-	scope, err := ct.G.ScopeForAction(sessionUserID, db.EntityTypeDepot, "entries:list")
+	scope, err := ct.G.ScopeForActionWithContext(sessionUserID, groupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1673,17 +1692,17 @@ func (ct DividendEntriesController) PostCalculateWithholdingTaxRefund(c *gin.Con
 		return
 	}
 
-	inGroup, err := ct.DB.IsUserInGroup(req.ContextGroupID, sessionUserID)
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeGroup, "withholding-tax-default:list", req.ContextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
-	if !inGroup {
+	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:create", entry.DepotID)
+	allowed, err = ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeDepot, "entries:create", entry.DepotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1827,7 +1846,7 @@ func (ct DividendEntriesController) PostAdd(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:create", entry.DepotID)
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, req.ContextGroupID, db.EntityTypeDepot, "entries:create", entry.DepotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1891,16 +1910,6 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 	}
 	if !found {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "DIVIDEND_ENTRY_NOT_FOUND"})
-		return
-	}
-
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:edit", existing.DepotID)
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
 		return
 	}
 
@@ -2028,6 +2037,17 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return
 	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, groupID, db.EntityTypeDepot, "entries:edit", existing.DepotID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+		return
+	}
+
 	if err := validateDividendEntrySecurity(ct.DB, groupID, &updated, fieldErrors); err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -2052,6 +2072,18 @@ func (ct DividendEntriesController) PostUpdate(c *gin.Context) {
 	if len(fieldErrors) > 0 {
 		writeFieldErrors(c, fieldErrors)
 		return
+	}
+
+	if updated.DepotID != existing.DepotID {
+		allowed, err := ct.G.CanDoWithContext(sessionUserID, groupID, db.EntityTypeDepot, "entries:create", updated.DepotID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+		if !allowed {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN_DEPOT"})
+			return
+		}
 	}
 
 	if err := prepareCalculatedDividendFields(ct.DB, groupID, &updated, fieldErrors); err != nil {
@@ -2111,7 +2143,12 @@ func (ct DividendEntriesController) PostDelete(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDo(sessionUserID, db.EntityTypeDepot, "entries:delete", item.DepotID)
+	contextGroupID, ok := parseDividendEntryContextGroupID(c)
+	if !ok {
+		return
+	}
+
+	allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:delete", item.DepotID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

@@ -98,7 +98,7 @@ func TestAuthLoginLogoutFlow(t *testing.T) {
 		t.Fatalf("login should set session cookie")
 	}
 
-	listReqBefore, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/users/list", nil)
+	listReqBefore, _ := http.NewRequest(http.MethodGet, srv.URL+"/api/users/list?context_group_id=1", nil)
 	listReqBefore.Header.Set("Origin", origin)
 
 	listResBefore, err := client.Do(listReqBefore)

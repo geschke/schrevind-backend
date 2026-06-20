@@ -60,7 +60,7 @@ func Create(ctx context.Context, database *db.DB, p CreateParams) (int64, error)
 		}); err != nil {
 			return 0, fmt.Errorf("grant system-admin to first user: %w", err)
 		}
-		if _, err := database.AddUserToGroup(db.SystemGroupID, id); err != nil {
+		if _, err := database.AddGroupMember(db.SystemGroupID, id, db.RoleGroupAdmin); err != nil {
 			return 0, fmt.Errorf("add first user to system group: %w", err)
 		}
 	}

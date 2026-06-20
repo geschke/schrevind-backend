@@ -25,12 +25,6 @@ func New(database *db.DB) *Grrt {
 	return &Grrt{db: database}
 }
 
-// Can checks whether userID may perform a system-wide action.
-// Equivalent to CanDo(userID, "system", action, 1).
-func (g *Grrt) Can(userID int64, action string) (bool, error) {
-	return g.CanDo(userID, db.EntityTypeSystem, action, db.SystemGroupID)
-}
-
 func (g *Grrt) isSystemAdmin(userID int64) (bool, error) {
 	if g == nil || g.db == nil {
 		return false, fmt.Errorf("grrt not initialized")
@@ -46,33 +40,62 @@ func (g *Grrt) isSystemAdmin(userID int64) (bool, error) {
 	return found && sysM.Role == db.RoleSystemAdmin, nil
 }
 
-// CanDo checks whether userID may perform action on (entityType, entityID).
-//
-// Check order:
-//  1. Does the user have a system-admin membership? If yes, allow everything.
-//  2. Does the user have a membership for (entityType, entityID)?
-//     If yes, check whether their role appears in permissions[entityType][action].
-func (g *Grrt) CanDo(userID int64, entityType string, action string, entityID int64) (bool, error) {
+func (g *Grrt) checkContextGroup(userID, contextGroupID int64) (sudo bool, allowed bool, err error) {
 	if g == nil || g.db == nil {
-		return false, fmt.Errorf("grrt not initialized")
+		return false, false, fmt.Errorf("grrt not initialized")
 	}
 	if userID <= 0 {
-		return false, fmt.Errorf("userID must be > 0")
+		return false, false, fmt.Errorf("userID must be > 0")
+	}
+	if contextGroupID <= 0 {
+		return false, false, fmt.Errorf("contextGroupID must be > 0")
 	}
 
-	// Step 1: system-admin bypass (unless we are already checking a system action
-	// to avoid infinite recursion).
-	if entityType != db.EntityTypeSystem {
+	if contextGroupID == db.SystemGroupID {
 		isSystemAdmin, err := g.isSystemAdmin(userID)
 		if err != nil {
-			return false, err
+			return false, false, err
 		}
-		if isSystemAdmin {
-			return true, nil
-		}
+		return isSystemAdmin, isSystemAdmin, nil
 	}
 
-	// Step 2: entity-level membership check.
+	inContextGroup, err := g.db.IsUserInGroup(contextGroupID, userID)
+	if err != nil {
+		return false, false, fmt.Errorf("grrt context check: %w", err)
+	}
+	return false, inContextGroup, nil
+}
+
+// ContextGroupAllowed checks whether userID may act in contextGroupID.
+// It returns true for system-admin sudo in the system group context, or for members of a normal group context.
+func (g *Grrt) ContextGroupAllowed(userID, contextGroupID int64) (bool, error) {
+	_, allowed, err := g.checkContextGroup(userID, contextGroupID)
+	return allowed, err
+}
+
+// CanWithContext checks whether userID may perform a system-wide action in the active context.
+func (g *Grrt) CanWithContext(userID, contextGroupID int64, action string) (bool, error) {
+	return g.CanDoWithContext(userID, contextGroupID, db.EntityTypeSystem, action, db.SystemGroupID)
+}
+
+// CanDoWithContext checks whether userID may perform action on (entityType, entityID)
+// while acting in contextGroupID. System-admin sudo rights only apply in the system context.
+func (g *Grrt) CanDoWithContext(userID, contextGroupID int64, entityType string, action string, entityID int64) (bool, error) {
+	if entityID <= 0 {
+		return false, fmt.Errorf("entityID must be > 0")
+	}
+
+	sudo, contextAllowed, err := g.checkContextGroup(userID, contextGroupID)
+	if err != nil {
+		return false, err
+	}
+	if !contextAllowed {
+		return false, nil
+	}
+	if sudo {
+		return true, nil
+	}
+
 	m, found, err := g.db.GetMembership(entityType, entityID, userID)
 	if err != nil {
 		return false, fmt.Errorf("grrt entity check: %w", err)
@@ -84,24 +107,21 @@ func (g *Grrt) CanDo(userID int64, entityType string, action string, entityID in
 	return roleAllowed(entityType, action, m.Role), nil
 }
 
-// CanDoAny checks whether userID may perform action on at least one entity of entityType.
-func (g *Grrt) CanDoAny(userID int64, entityType string, action string) (bool, error) {
-	if g == nil || g.db == nil {
-		return false, fmt.Errorf("grrt not initialized")
-	}
-	if userID <= 0 {
-		return false, fmt.Errorf("userID must be > 0")
-	}
-	if entityType == db.EntityTypeSystem {
-		return g.Can(userID, action)
-	}
-
-	isSystemAdmin, err := g.isSystemAdmin(userID)
+// CanDoAnyWithContext checks whether userID may perform action on at least one entity
+// of entityType while acting in contextGroupID.
+func (g *Grrt) CanDoAnyWithContext(userID, contextGroupID int64, entityType string, action string) (bool, error) {
+	sudo, contextAllowed, err := g.checkContextGroup(userID, contextGroupID)
 	if err != nil {
 		return false, err
 	}
-	if isSystemAdmin {
+	if !contextAllowed {
+		return false, nil
+	}
+	if sudo {
 		return true, nil
+	}
+	if entityType == db.EntityTypeSystem {
+		return g.CanDoWithContext(userID, contextGroupID, entityType, action, db.SystemGroupID)
 	}
 
 	roles, err := AllowedRoles(entityType, action)
@@ -112,20 +132,17 @@ func (g *Grrt) CanDoAny(userID int64, entityType string, action string) (bool, e
 	return g.db.UserHasAnyMembershipWithRoles(userID, entityType, roles)
 }
 
-// ScopeForAction returns the effective scope for a many-entity action.
-func (g *Grrt) ScopeForAction(userID int64, entityType string, action string) (ActionScope, error) {
-	if g == nil || g.db == nil {
-		return ActionScope{}, fmt.Errorf("grrt not initialized")
-	}
-	if userID <= 0 {
-		return ActionScope{}, fmt.Errorf("userID must be > 0")
-	}
-
-	isSystemAdmin, err := g.isSystemAdmin(userID)
+// ScopeForActionWithContext returns the effective scope for a many-entity action
+// while acting in contextGroupID.
+func (g *Grrt) ScopeForActionWithContext(userID, contextGroupID int64, entityType string, action string) (ActionScope, error) {
+	sudo, contextAllowed, err := g.checkContextGroup(userID, contextGroupID)
 	if err != nil {
 		return ActionScope{}, err
 	}
-	if isSystemAdmin && entityType != db.EntityTypeSystem {
+	if !contextAllowed {
+		return ActionScope{}, nil
+	}
+	if sudo && entityType != db.EntityTypeSystem {
 		return ActionScope{All: true}, nil
 	}
 
