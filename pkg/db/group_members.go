@@ -261,13 +261,19 @@ SELECT g.id, g.name, g.created_at, g.updated_at
 }
 
 // ListGroupMembersByGroupID returns all users belonging to the given group
-// enriched with their group role.
+// enriched with their group role. The reserved system group is backed by
+// entity_type='system' memberships, not normal entity_type='group' rows.
 func (d *DB) ListGroupMembersByGroupID(groupID int64) ([]GroupMember, error) {
 	if d == nil || d.SQL == nil {
 		return nil, fmt.Errorf("db not initialized")
 	}
 	if groupID <= 0 {
 		return nil, fmt.Errorf("groupID must be > 0")
+	}
+
+	entityType := EntityTypeGroup
+	if groupID == SystemGroupID {
+		entityType = EntityTypeSystem
 	}
 
 	rows, err := d.SQL.Query(`
@@ -285,7 +291,7 @@ SELECT u.id,
                     AND m.entity_id   = ?
                     AND m.user_id     = u.id
  ORDER BY u.id ASC;
-`, EntityTypeGroup, groupID)
+`, entityType, groupID)
 	if err != nil {
 		return nil, fmt.Errorf("list group members by group: %w", err)
 	}

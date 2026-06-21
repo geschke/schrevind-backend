@@ -321,6 +321,26 @@ SELECT COUNT(*)
 	return count, nil
 }
 
+// CountSystemAdminMemberships returns the number of system-admin memberships.
+func (d *DB) CountSystemAdminMemberships() (int, error) {
+	if d == nil || d.SQL == nil {
+		return 0, fmt.Errorf("db not initialized")
+	}
+
+	var count int
+	err := d.SQL.QueryRow(`
+SELECT COUNT(*)
+  FROM memberships
+ WHERE entity_type = ?
+   AND entity_id   = ?
+   AND role        = ?;
+`, EntityTypeSystem, SystemGroupID, RoleSystemAdmin).Scan(&count)
+	if err != nil {
+		return 0, fmt.Errorf("count system admins: %w", err)
+	}
+	return count, nil
+}
+
 // CountGroupMembershipsByUserID returns the number of groups a user belongs to.
 func (d *DB) CountGroupMembershipsByUserID(userID int64) (int, error) {
 	if d == nil || d.SQL == nil {

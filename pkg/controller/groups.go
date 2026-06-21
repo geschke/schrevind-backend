@@ -534,6 +534,10 @@ func (ct GroupsController) GetMembers(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if groupID == db.SystemGroupID && contextGroupID != db.SystemGroupID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
 
 	allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeGroup, "member:list", groupID)
 	if err != nil {
@@ -601,11 +605,20 @@ func (ct GroupsController) PostMemberAdd(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return
 	}
+	if targetGroupID == db.SystemGroupID && req.ContextGroupID != db.SystemGroupID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
 
 	seen := make(map[int64]struct{}, len(req.Members))
 	for i := range req.Members {
 		req.Members[i].Role = strings.TrimSpace(req.Members[i].Role)
-		if req.Members[i].Role == "" {
+		if targetGroupID == db.SystemGroupID {
+			if req.Members[i].Role != db.RoleSystemAdmin {
+				c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_ROLE"})
+				return
+			}
+		} else if req.Members[i].Role == "" {
 			req.Members[i].Role = db.RoleGroupMember
 		}
 		if req.Members[i].UserID <= 0 {
@@ -617,10 +630,49 @@ func (ct GroupsController) PostMemberAdd(c *gin.Context) {
 			return
 		}
 		seen[req.Members[i].UserID] = struct{}{}
-		if !db.IsValidGroupRole(req.Members[i].Role) {
+		if targetGroupID != db.SystemGroupID && !db.IsValidGroupRole(req.Members[i].Role) {
 			c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_ROLE"})
 			return
 		}
+	}
+
+	if targetGroupID == db.SystemGroupID {
+		var addedCount, skippedCount int64
+		for _, member := range req.Members {
+			_, found, err := ct.DB.GetMembership(db.EntityTypeSystem, db.SystemGroupID, member.UserID)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+				return
+			}
+			if found {
+				skippedCount++
+				continue
+			}
+			if err := ct.DB.GrantMembership(&db.Membership{
+				EntityType: db.EntityTypeSystem,
+				EntityID:   db.SystemGroupID,
+				UserID:     member.UserID,
+				Role:       db.RoleSystemAdmin,
+			}); err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+				return
+			}
+			addedCount++
+			_ = ct.DB.WriteAuditLog(&db.AuditLog{
+				UserID:     sessionUserID,
+				Action:     db.ActionGrant,
+				EntityType: db.EntityTypeSystem,
+				EntityID:   db.SystemGroupID,
+				Detail:     strings.Join([]string{strconv.FormatInt(member.UserID, 10), member.Role}, ":"),
+			})
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success": true,
+			"added":   addedCount,
+			"skipped": skippedCount,
+		})
+		return
 	}
 
 	finalAdminCount, err := ct.groupAdminCountAfterAdd(targetGroupID, req.Members)
@@ -737,10 +789,66 @@ func (ct GroupsController) PostMemberRemove(c *gin.Context) {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return
 	}
+	if targetGroupID == db.SystemGroupID && req.ContextGroupID != db.SystemGroupID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
 
 	userIDs, message := uniquePositiveUserIDs(req.UserIDs)
 	if message != "" {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": message})
+		return
+	}
+
+	if targetGroupID == db.SystemGroupID {
+		currentAdminCount, err := ct.DB.CountSystemAdminMemberships()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+			return
+		}
+
+		removeAdminCount := 0
+		for _, uid := range userIDs {
+			_, found, err := ct.DB.GetMembership(db.EntityTypeSystem, db.SystemGroupID, uid)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+				return
+			}
+			if found {
+				removeAdminCount++
+			}
+		}
+		if currentAdminCount-removeAdminCount <= 0 {
+			c.JSON(http.StatusConflict, gin.H{"success": false, "message": "LAST_GROUP_ADMIN"})
+			return
+		}
+
+		var removedCount, notFoundCount int64
+		for _, uid := range userIDs {
+			removed, err := ct.DB.RevokeMembership(db.EntityTypeSystem, db.SystemGroupID, uid)
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+				return
+			}
+			if removed {
+				removedCount++
+				_ = ct.DB.WriteAuditLog(&db.AuditLog{
+					UserID:     sessionUserID,
+					Action:     db.ActionRevoke,
+					EntityType: db.EntityTypeSystem,
+					EntityID:   db.SystemGroupID,
+					Detail:     strconv.FormatInt(uid, 10),
+				})
+			} else {
+				notFoundCount++
+			}
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"success":   true,
+			"removed":   removedCount,
+			"not_found": notFoundCount,
+		})
 		return
 	}
 

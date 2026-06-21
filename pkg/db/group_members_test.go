@@ -82,6 +82,80 @@ func TestListGroupMembersByGroupIDIncludesExplicitRole(t *testing.T) {
 	}
 }
 
+func TestListGroupMembersByGroupIDUsesSystemMembershipsForSystemGroup(t *testing.T) {
+	database := newGroupMembersTestDB(t)
+	ctx := context.Background()
+
+	userID, err := database.CreateUser(ctx, User{
+		Email:    "system-member-list@example.com",
+		Password: "secret",
+		Locale:   "en-US",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	if err := database.GrantMembership(&Membership{
+		EntityType: EntityTypeSystem,
+		EntityID:   SystemGroupID,
+		UserID:     userID,
+		Role:       RoleSystemAdmin,
+	}); err != nil {
+		t.Fatalf("GrantMembership(system admin) error = %v", err)
+	}
+
+	members, err := database.ListGroupMembersByGroupID(SystemGroupID)
+	if err != nil {
+		t.Fatalf("ListGroupMembersByGroupID(system) error = %v", err)
+	}
+	if len(members) != 1 {
+		t.Fatalf("len(members) = %d, want 1", len(members))
+	}
+	if members[0].ID != userID {
+		t.Fatalf("members[0].ID = %d, want %d", members[0].ID, userID)
+	}
+	if members[0].Role != RoleSystemAdmin {
+		t.Fatalf("members[0].Role = %q, want %q", members[0].Role, RoleSystemAdmin)
+	}
+}
+
+func TestListGroupsWithRoleByUserIDIncludesSystemGroupForSystemAdmin(t *testing.T) {
+	database := newGroupMembersTestDB(t)
+	ctx := context.Background()
+
+	userID, err := database.CreateUser(ctx, User{
+		Email:    "system-admin-groups@example.com",
+		Password: "secret",
+		Locale:   "en-US",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	if err := database.GrantMembership(&Membership{
+		EntityType: EntityTypeSystem,
+		EntityID:   SystemGroupID,
+		UserID:     userID,
+		Role:       RoleSystemAdmin,
+	}); err != nil {
+		t.Fatalf("GrantMembership(system admin) error = %v", err)
+	}
+
+	groups, err := database.ListGroupsWithRoleByUserID(userID)
+	if err != nil {
+		t.Fatalf("ListGroupsWithRoleByUserID() error = %v", err)
+	}
+	if len(groups) != 1 {
+		t.Fatalf("len(groups) = %d, want 1", len(groups))
+	}
+	if groups[0].ID != SystemGroupID {
+		t.Fatalf("groups[0].ID = %d, want system group ID %d", groups[0].ID, SystemGroupID)
+	}
+	if groups[0].Role != RoleSystemAdmin {
+		t.Fatalf("groups[0].Role = %q, want %q", groups[0].Role, RoleSystemAdmin)
+	}
+}
+
 func TestAddGroupMemberSetsAndChangesGroupRole(t *testing.T) {
 	database := newGroupMembersTestDB(t)
 	ctx := context.Background()
@@ -346,6 +420,45 @@ func TestCountGroupMembershipsByUserID(t *testing.T) {
 	}
 	if count != 2 {
 		t.Fatalf("group membership count = %d, want 2", count)
+	}
+}
+
+func TestCountSystemAdminMemberships(t *testing.T) {
+	database := newGroupMembersTestDB(t)
+	ctx := context.Background()
+
+	userID, err := database.CreateUser(ctx, User{
+		Email:    "system-admin-count@example.com",
+		Password: "secret",
+		Locale:   "en-US",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+
+	count, err := database.CountSystemAdminMemberships()
+	if err != nil {
+		t.Fatalf("CountSystemAdminMemberships(empty) error = %v", err)
+	}
+	if count != 0 {
+		t.Fatalf("system admin count = %d, want 0", count)
+	}
+
+	if err := database.GrantMembership(&Membership{
+		EntityType: EntityTypeSystem,
+		EntityID:   SystemGroupID,
+		UserID:     userID,
+		Role:       RoleSystemAdmin,
+	}); err != nil {
+		t.Fatalf("GrantMembership(system admin) error = %v", err)
+	}
+
+	count, err = database.CountSystemAdminMemberships()
+	if err != nil {
+		t.Fatalf("CountSystemAdminMemberships(one admin) error = %v", err)
+	}
+	if count != 1 {
+		t.Fatalf("system admin count = %d, want 1", count)
 	}
 }
 
