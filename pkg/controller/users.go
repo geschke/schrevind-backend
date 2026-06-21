@@ -218,37 +218,25 @@ func (ct UsersController) GetList(c *gin.Context) {
 	if !ok {
 		return
 	}
+	if contextGroupID != db.SystemGroupID {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
+
+	allowed, err := ct.G.CanWithContext(sessionUserID, contextGroupID, "user:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return
+	}
+	if !allowed {
+		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
+		return
+	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	var items []db.User
-	var err error
-	if contextGroupID == db.SystemGroupID {
-		allowed, err := ct.G.CanWithContext(sessionUserID, contextGroupID, "user:list")
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-			return
-		}
-		if !allowed {
-			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-			return
-		}
-
-		items, err = ct.DB.ListUsers(ctx)
-	} else {
-		allowed, err := ct.G.CanDoWithContext(sessionUserID, contextGroupID, db.EntityTypeGroup, "user:list", contextGroupID)
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-			return
-		}
-		if !allowed {
-			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-			return
-		}
-
-		items, err = ct.DB.ListUsersByGroupID(contextGroupID)
-	}
+	items, err := ct.DB.ListUsers(ctx)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -289,6 +277,10 @@ func (ct UsersController) GetByID(c *gin.Context) {
 	if id != sessionUserID {
 		contextGroupID, ok := parseUsersContextGroupIDQuery(c)
 		if !ok {
+			return
+		}
+		if contextGroupID != db.SystemGroupID {
+			c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 			return
 		}
 

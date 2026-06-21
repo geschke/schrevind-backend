@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 )
@@ -259,52 +260,6 @@ SELECT g.id, g.name, g.created_at, g.updated_at
 	return out, nil
 }
 
-// ListUsersByGroupID returns all users belonging to the given group.
-func (d *DB) ListUsersByGroupID(groupID int64) ([]User, error) {
-	if d == nil || d.SQL == nil {
-		return nil, fmt.Errorf("db not initialized")
-	}
-	if groupID <= 0 {
-		return nil, fmt.Errorf("groupID must be > 0")
-	}
-
-	rows, err := d.SQL.Query(`
-SELECT u.id, u.firstname, u.lastname, u.email, u.locale, u.status, u.created_at, u.updated_at
-  FROM users u
-  JOIN memberships m ON m.entity_type = ?
-                    AND m.user_id     = u.id
- WHERE m.entity_id = ?
- ORDER BY u.id ASC;
-`, EntityTypeGroup, groupID)
-	if err != nil {
-		return nil, fmt.Errorf("list users by group: %w", err)
-	}
-	defer func() { _ = rows.Close() }()
-
-	out := make([]User, 0)
-	for rows.Next() {
-		var u User
-		if err := rows.Scan(
-			&u.ID,
-			&u.FirstName,
-			&u.LastName,
-			&u.Email,
-			&u.Locale,
-			&u.Status,
-			&u.CreatedAt,
-			&u.UpdatedAt,
-		); err != nil {
-			return nil, fmt.Errorf("scan user by group: %w", err)
-		}
-		out = append(out, u)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate users by group: %w", err)
-	}
-
-	return out, nil
-}
-
 // ListGroupMembersByGroupID returns all users belonging to the given group
 // enriched with their group role.
 func (d *DB) ListGroupMembersByGroupID(groupID int64) ([]GroupMember, error) {
@@ -384,6 +339,7 @@ func (d *DB) ListGroupsWithRoleByUserID(userID int64) ([]GroupWithRole, error) {
 	}
 
 	roleByGroup := make(map[int64]string, len(memberships))
+	hasSystemAdmin := false
 	for _, m := range memberships {
 		switch {
 		case m.EntityType == EntityTypeGroup:
@@ -392,6 +348,30 @@ func (d *DB) ListGroupsWithRoleByUserID(userID int64) ([]GroupWithRole, error) {
 			// System-admin membership is stored under entity_type='system',
 			// but is shown as the role for the reserved system group.
 			roleByGroup[SystemGroupID] = m.Role
+			hasSystemAdmin = m.Role == RoleSystemAdmin
+		}
+	}
+
+	if hasSystemAdmin {
+		hasSystemGroup := false
+		for _, g := range groups {
+			if g.ID == SystemGroupID {
+				hasSystemGroup = true
+				break
+			}
+		}
+		if !hasSystemGroup {
+			systemGroup, found, err := d.GetGroupByID(SystemGroupID)
+			if err != nil {
+				return nil, err
+			}
+			if !found {
+				return nil, fmt.Errorf("system group not found")
+			}
+			groups = append(groups, systemGroup)
+			sort.Slice(groups, func(i, j int) bool {
+				return groups[i].ID < groups[j].ID
+			})
 		}
 	}
 
@@ -405,9 +385,5 @@ func (d *DB) ListGroupsWithRoleByUserID(userID int64) ([]GroupWithRole, error) {
 			UpdatedAt: g.UpdatedAt,
 		}
 	}
-	//fmt.Println("Userid: ", userID)
-	//fmt.Println(roleByGroup)
-	//fmt.Println(memberships)
-	//fmt.Println(out)
 	return out, nil
 }

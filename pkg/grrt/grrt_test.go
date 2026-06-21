@@ -289,7 +289,7 @@ func TestGroupMemberPermissionsAreConfigured(t *testing.T) {
 		"withholding-tax-default:add",
 		"withholding-tax-default:edit",
 		"group:list:accessible",
-		"user:list",
+		"member:list",
 	} {
 		roles, err := AllowedRoles(db.EntityTypeGroup, action)
 		if err != nil {
@@ -322,6 +322,9 @@ func TestGroupMemberPermissionsAreConfigured(t *testing.T) {
 
 	if _, err := AllowedRoles(db.EntityTypeGroup, "member:add"); err == nil {
 		t.Fatalf("AllowedRoles(group, member:add) error = nil, want unknown action")
+	}
+	if _, err := AllowedRoles(db.EntityTypeGroup, "user:list"); err == nil {
+		t.Fatalf("AllowedRoles(group, user:list) error = nil, want unknown action")
 	}
 
 	roles, err := AllowedRoles(db.EntityTypeSystem, "member:add")
