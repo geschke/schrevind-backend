@@ -201,6 +201,40 @@ func TestListAccessibleDividendEntriesByUserAppliesOptionalFilters(t *testing.T)
 	}
 }
 
+func TestListAccessibleDividendEntriesByUserWithDepotMembership(t *testing.T) {
+	database := newDividendEntriesTestDB(t)
+	entry := validDividendEntryForDBTest(t, database)
+	if err := database.CreateDividendEntry(&entry); err != nil {
+		t.Fatalf("CreateDividendEntry() error = %v", err)
+	}
+
+	userID, err := database.CreateUser(context.Background(), User{
+		Email:    "entry-viewer@example.com",
+		Password: "secret",
+		Locale:   "en-US",
+	})
+	if err != nil {
+		t.Fatalf("CreateUser() error = %v", err)
+	}
+	if err := database.GrantMembership(&Membership{
+		EntityType: EntityTypeDepot,
+		EntityID:   entry.DepotID,
+		UserID:     userID,
+		Role:       RoleDepotViewer,
+	}); err != nil {
+		t.Fatalf("GrantMembership() error = %v", err)
+	}
+
+	roles := []string{RoleDepotOwner, RoleDepotEditor, RoleDepotViewer}
+	items, err := database.ListAccessibleDividendEntriesByUser(userID, false, roles, 20, 0, "PayDate", "DESC", DividendEntryListFilters{})
+	if err != nil {
+		t.Fatalf("ListAccessibleDividendEntriesByUser() error = %v", err)
+	}
+	if len(items) != 1 || items[0].ID != entry.ID {
+		t.Fatalf("items = %+v, want entry ID %d", items, entry.ID)
+	}
+}
+
 func TestListAccessibleDividendEntriesByUserSearchesUnicodeCaseVariants(t *testing.T) {
 	database := newDividendEntriesTestDB(t)
 

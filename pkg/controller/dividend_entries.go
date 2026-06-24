@@ -1,6 +1,7 @@
 package controller
 
 import (
+	"log"
 	"net/http"
 	"strconv"
 	"strings"
@@ -1331,8 +1332,9 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAnyWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list")
+	allowed, err := ct.G.ContextGroupAllowed(sessionUserID, contextGroupID)
 	if err != nil {
+		log.Printf("list dividend entries context check failed: user_id=%d context_group_id=%d: %v", sessionUserID, contextGroupID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
@@ -1343,6 +1345,7 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 
 	scope, err := ct.G.ScopeForActionWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list")
 	if err != nil {
+		log.Printf("list dividend entries scope lookup failed: user_id=%d context_group_id=%d: %v", sessionUserID, contextGroupID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
@@ -1354,18 +1357,21 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 
 	items, err := ct.DB.ListAccessibleDividendEntriesByUser(requestedUserID, scope.All, scope.Roles, limit, offset, sortBy, direction, filters)
 	if err != nil {
+		log.Printf("list dividend entries query failed: user_id=%d context_group_id=%d: %v", sessionUserID, contextGroupID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 
 	count, err := ct.DB.CountAccessibleDividendEntriesByUser(requestedUserID, scope.All, scope.Roles, filters)
 	if err != nil {
+		log.Printf("count dividend entries query failed: user_id=%d context_group_id=%d: %v", sessionUserID, contextGroupID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
 
 	locale, ok, err := ct.currentSessionUserLocale(c)
 	if err != nil {
+		log.Printf("load dividend entries locale failed: user_id=%d context_group_id=%d: %v", sessionUserID, contextGroupID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
@@ -1376,6 +1382,7 @@ func (ct DividendEntriesController) GetListByUser(c *gin.Context) {
 	formatter := newDividendEntryCurrencyFormatter(ct.DB)
 	items, err = formatDividendEntriesForLocale(items, locale, formatter)
 	if err != nil {
+		log.Printf("format dividend entries failed: user_id=%d context_group_id=%d: %v", sessionUserID, contextGroupID, err)
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
 	}
@@ -1432,7 +1439,7 @@ func (ct DividendEntriesController) GetTimeRange(c *gin.Context) {
 			timeRange = foundRange
 		}
 	} else {
-		allowed, err := ct.G.CanDoAnyWithContext(sessionUserID, contextGroupID, db.EntityTypeDepot, "entries:list")
+		allowed, err := ct.G.ContextGroupAllowed(sessionUserID, contextGroupID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 			return
@@ -1574,7 +1581,7 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 		return
 	}
 
-	inGroup, err := ct.DB.IsUserInGroup(groupID, sessionUserID)
+	inGroup, err := ct.G.ContextGroupAllowed(sessionUserID, groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return
@@ -1591,16 +1598,6 @@ func (ct DividendEntriesController) GetListBySecurity(c *gin.Context) {
 	}
 	if security == nil {
 		c.JSON(http.StatusNotFound, gin.H{"success": false, "message": "SECURITY_NOT_FOUND"})
-		return
-	}
-
-	allowed, err := ct.G.CanDoAnyWithContext(sessionUserID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
 		return
 	}
 

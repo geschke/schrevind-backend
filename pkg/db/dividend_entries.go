@@ -167,13 +167,13 @@ func normalizeDividendEntry(entry DividendEntry) (DividendEntry, error) {
 }
 
 const dividendEntrySelectColumns = `
-       id, depot_id, security_id, pay_date, ex_date, security_name, security_isin, security_wkn, security_symbol,
-       quantity, dividend_per_unit_amount, dividend_per_unit_currency, fx_rate_label, fx_rate, gross_amount, gross_currency,
-       payout_amount, payout_currency, withholding_tax_country_code, withholding_tax_percent, withholding_tax_amount,
-       withholding_tax_currency, withholding_tax_amount_credit, withholding_tax_amount_credit_currency,
-       withholding_tax_amount_refundable, withholding_tax_amount_refundable_currency, inland_tax_amount, inland_tax_currency,
-       inland_tax_details, foreign_fees_amount, foreign_fees_currency,
-       note, calc_gross_amount_base, calc_after_withholding_amount_base, created_at, updated_at`
+       de.id, de.depot_id, de.security_id, de.pay_date, de.ex_date, de.security_name, de.security_isin, de.security_wkn, de.security_symbol,
+       de.quantity, de.dividend_per_unit_amount, de.dividend_per_unit_currency, de.fx_rate_label, de.fx_rate, de.gross_amount, de.gross_currency,
+       de.payout_amount, de.payout_currency, de.withholding_tax_country_code, de.withholding_tax_percent, de.withholding_tax_amount,
+       de.withholding_tax_currency, de.withholding_tax_amount_credit, de.withholding_tax_amount_credit_currency,
+       de.withholding_tax_amount_refundable, de.withholding_tax_amount_refundable_currency, de.inland_tax_amount, de.inland_tax_currency,
+       de.inland_tax_details, de.foreign_fees_amount, de.foreign_fees_currency,
+       de.note, de.calc_gross_amount_base, de.calc_after_withholding_amount_base, de.created_at, de.updated_at`
 
 func scanDividendEntry(row *sql.Row) (DividendEntry, error) {
 	var e DividendEntry
@@ -600,8 +600,8 @@ func (d *DB) GetDividendEntryByID(id int64) (DividendEntry, bool, error) {
 
 	row := d.SQL.QueryRow(`
 SELECT`+dividendEntrySelectColumns+`
-  FROM dividend_entries
- WHERE id = ?
+  FROM dividend_entries de
+ WHERE de.id = ?
  LIMIT 1;
 `, id)
 
@@ -640,8 +640,8 @@ func (d *DB) ListAllDividendEntries() ([]DividendEntry, error) {
 
 	rows, err := d.SQL.Query(`
 SELECT` + dividendEntrySelectColumns + `
-  FROM dividend_entries
- ORDER BY pay_date ASC, id ASC;
+  FROM dividend_entries de
+ ORDER BY de.pay_date ASC, de.id ASC;
 `)
 	if err != nil {
 		return nil, fmt.Errorf("list all dividend entries for export: %w", err)

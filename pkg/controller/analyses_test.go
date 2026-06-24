@@ -1,12 +1,61 @@
 package controller
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
 	"github.com/geschke/schrevind/pkg/db"
+	"github.com/geschke/schrevind/pkg/grrt"
+	"github.com/gin-gonic/gin"
 )
+
+func TestAnalysisDepotScopeAllowsGroupMemberWithoutDepotMembership(t *testing.T) {
+	database, err := db.Open(filepath.Join(t.TempDir(), "analyses.sqlite"))
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { _ = database.Close() })
+	if err := database.Migrate(); err != nil {
+		t.Fatalf("migrate test db: %v", err)
+	}
+
+	ctx := context.Background()
+	adminID, err := database.CreateUser(ctx, db.User{Email: "admin@example.com", Password: "secret", Locale: "en-US"})
+	if err != nil {
+		t.Fatalf("create admin user: %v", err)
+	}
+	memberID, err := database.CreateUser(ctx, db.User{Email: "member@example.com", Password: "secret", Locale: "en-US"})
+	if err != nil {
+		t.Fatalf("create member user: %v", err)
+	}
+	group := db.Group{Name: "Empty Group"}
+	if err := database.CreateGroup(&group); err != nil {
+		t.Fatalf("create group: %v", err)
+	}
+	if _, err := database.AddGroupMember(group.ID, adminID, db.RoleGroupAdmin); err != nil {
+		t.Fatalf("add group admin: %v", err)
+	}
+	if _, err := database.AddGroupMember(group.ID, memberID, db.RoleGroupMember); err != nil {
+		t.Fatalf("add group member: %v", err)
+	}
+
+	controller := AnalysesController{DB: database, G: grrt.New(database)}
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	scope, ok := controller.analysisDepotScope(c, memberID, group.ID)
+	if !ok {
+		t.Fatal("analysisDepotScope() ok = false, want true for a valid group member")
+	}
+	if scope.All {
+		t.Fatal("analysisDepotScope() scope.All = true, want false for regular group member")
+	}
+	if len(scope.Roles) == 0 {
+		t.Fatal("analysisDepotScope() roles are empty, want the entries:list role scope")
+	}
+}
 
 func TestUniqueDepotBaseCurrency(t *testing.T) {
 	currency, ok, currencies := uniqueDepotBaseCurrency([]db.Depot{

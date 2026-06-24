@@ -412,19 +412,26 @@ func (ct AnalysesController) loadDecimalPlacesForBaseCurrency(groupID int64, bas
 	return decimalPlaces, true
 }
 
-// ensureAnalysisGroupMember only validates the active group context.
-// The actual data scope for analyses is controlled by depot entries:list rights.
-func (ct AnalysesController) ensureAnalysisGroupMember(c *gin.Context, userID, groupID int64) bool {
-	member, err := ct.DB.IsUserInGroup(groupID, userID)
+// analysisDepotScope validates the active group context and returns the depot
+// access scope. A valid group member may have no depot memberships yet; callers
+// must treat that as an empty result, not as a forbidden request.
+func (ct AnalysesController) analysisDepotScope(c *gin.Context, userID, groupID int64) (grrt.ActionScope, bool) {
+	allowed, err := ct.G.ContextGroupAllowed(userID, groupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return false
+		return grrt.ActionScope{}, false
 	}
-	if !member {
+	if !allowed {
 		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return false
+		return grrt.ActionScope{}, false
 	}
-	return true
+
+	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+		return grrt.ActionScope{}, false
+	}
+	return scope, true
 }
 
 // GetDividendsByYearData handles GET /api/analyses/dividends-by-year-data.
@@ -445,23 +452,8 @@ func (ct AnalysesController) GetDividendsByYearData(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
-		return
-	}
-
-	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+	scope, ok := ct.analysisDepotScope(c, userID, groupID)
+	if !ok {
 		return
 	}
 
@@ -545,23 +537,8 @@ func (ct AnalysesController) GetDividendsByYearMonthData(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
-		return
-	}
-
-	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+	scope, ok := ct.analysisDepotScope(c, userID, groupID)
+	if !ok {
 		return
 	}
 
@@ -677,28 +654,13 @@ func (ct AnalysesController) GetDividendsBySecurityYearData(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
-		return
-	}
-
 	securityIDs, ok := parseAnalysisSecurityIDs(c)
 	if !ok {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+	scope, ok := ct.analysisDepotScope(c, userID, groupID)
+	if !ok {
 		return
 	}
 
@@ -790,10 +752,6 @@ func (ct AnalysesController) PostDividendsByYearMonthSecurityData(c *gin.Context
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_GROUP_ID"})
 		return
 	}
-	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
-		return
-	}
-
 	securityIDs, ok := parseAnalysisSecurityIDsFromList(req.SecurityIDs)
 	if !ok {
 		c.JSON(http.StatusBadRequest, gin.H{"success": false, "message": "INVALID_SECURITY_IDS"})
@@ -805,19 +763,8 @@ func (ct AnalysesController) PostDividendsByYearMonthSecurityData(c *gin.Context
 		return
 	}
 
-	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+	scope, ok := ct.analysisDepotScope(c, userID, groupID)
+	if !ok {
 		return
 	}
 
@@ -901,23 +848,8 @@ func (ct AnalysesController) GetDividendsByYearChart(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
-		return
-	}
-
-	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+	scope, ok := ct.analysisDepotScope(c, userID, groupID)
+	if !ok {
 		return
 	}
 
@@ -991,23 +923,8 @@ func (ct AnalysesController) GetDividendsByYearMonthChart(c *gin.Context) {
 	if !ok {
 		return
 	}
-	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
-		return
-	}
-
-	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+	scope, ok := ct.analysisDepotScope(c, userID, groupID)
+	if !ok {
 		return
 	}
 
@@ -1081,28 +998,13 @@ func (ct AnalysesController) GetDividendsBySecurityMonthShareChart(c *gin.Contex
 	if !ok {
 		return
 	}
-	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
-		return
-	}
-
 	year, month, ok := parseAnalysisYearMonthQuery(c)
 	if !ok {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+	scope, ok := ct.analysisDepotScope(c, userID, groupID)
+	if !ok {
 		return
 	}
 
@@ -1190,28 +1092,13 @@ func (ct AnalysesController) GetDividendsBySecurityYearShareChart(c *gin.Context
 	if !ok {
 		return
 	}
-	if !ct.ensureAnalysisGroupMember(c, userID, groupID) {
-		return
-	}
-
 	year, ok := parseAnalysisYearQuery(c)
 	if !ok {
 		return
 	}
 
-	allowed, err := ct.G.CanDoAnyWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
-		return
-	}
-	if !allowed {
-		c.JSON(http.StatusForbidden, gin.H{"success": false, "message": "FORBIDDEN"})
-		return
-	}
-
-	scope, err := ct.G.ScopeForActionWithContext(userID, groupID, db.EntityTypeDepot, "entries:list")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
+	scope, ok := ct.analysisDepotScope(c, userID, groupID)
+	if !ok {
 		return
 	}
 
