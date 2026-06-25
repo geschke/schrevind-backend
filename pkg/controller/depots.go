@@ -36,7 +36,7 @@ func (ct DepotsController) Options(c *gin.Context) {
 }
 
 type addDepotRequest struct {
-	// ContextGroupID is used only for the permission check (depot:create requires group admin).
+	// ContextGroupID is used only for group-context permission checks.
 	// It is not stored on the depot itself.
 	ContextGroupID int64  `json:"ContextGroupID"`
 	Name           string `json:"Name"`
@@ -202,7 +202,7 @@ func (ct DepotsController) GetList(c *gin.Context) {
 	if !ok {
 		return
 	}
-	allowed, err := ct.G.ContextGroupAllowed(userID, contextGroupID)
+	allowed, err := ct.G.CanDoWithContext(userID, contextGroupID, db.EntityTypeGroup, "depot:list", contextGroupID)
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, gin.H{"success": false, "message": "DB_ERROR"})
 		return

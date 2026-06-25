@@ -40,8 +40,8 @@ var permissions = map[string]map[string][]string{
 		"user:create":                    {"admin"},
 		"user:edit":                      {"admin"},
 		"user:delete":                    {"admin"},
-		"depot:create":                   {"admin"},
-		"depot:list":                     {"admin"},
+		"depot:create":                   {"admin", "member"},
+		"depot:list":                     {"admin", "member"},
 	},
 	"depot": {
 		"depot:rename":                 {"owner"},
