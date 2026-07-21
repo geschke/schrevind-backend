@@ -34,14 +34,23 @@ type DividendsBySecurityYearDataSourceRow struct {
 
 // DividendsByYearMonthSecuritySourceRow contains raw values used by the year/month/security dividend analysis.
 type DividendsByYearMonthSecuritySourceRow struct {
-	Year             string
-	Month            string
-	SecurityID       int64
-	SecurityName     string
-	SecurityISIN     string
-	Gross            string
-	AfterWithholding string
-	Net              string
+	ID                int64
+	PayDate           string
+	Year              string
+	Month             string
+	SecurityID        int64
+	SecurityName      string
+	SecurityISIN      string
+	OriginalAmount    string
+	OriginalCurrency  string
+	FXRate            string
+	DividendPerUnit   string
+	DividendCurrency  string
+	Gross             string
+	AfterWithholding  string
+	Net               string
+	InlandTaxAmount   string
+	InlandTaxCurrency string
 }
 
 // DividendsByYearSecuritySourceRow contains raw values used by the year/security share chart.
@@ -306,12 +315,21 @@ func (d *DB) ListDividendAnalysisYearMonthSecurityDataRowsByDepotIDs(depotIDs []
 	query := `
 SELECT strftime('%Y', pay_date) AS year,
        strftime('%m', pay_date) AS month,
+       id,
+       pay_date,
        security_id,
        security_name,
        security_isin,
+       gross_amount,
+       gross_currency,
+       fx_rate,
+       dividend_per_unit_amount,
+       dividend_per_unit_currency,
        calc_gross_amount_base,
        calc_after_withholding_amount_base,
-       payout_amount
+       payout_amount,
+       inland_tax_amount,
+       inland_tax_currency
   FROM dividend_entries
  WHERE depot_id IN (` + sqlPlaceholders(len(depotIDs)) + `)
    AND pay_date != ''
@@ -339,7 +357,7 @@ SELECT strftime('%Y', pay_date) AS year,
 		}
 		query += ")\n"
 	}
-	query += " ORDER BY year ASC, month ASC, security_name COLLATE NOCASE ASC, id ASC;\n"
+	query += " ORDER BY year ASC, month ASC, security_name COLLATE NOCASE ASC, pay_date ASC, id ASC;\n"
 
 	rows, err := d.SQL.Query(query, args...)
 	if err != nil {
@@ -353,12 +371,21 @@ SELECT strftime('%Y', pay_date) AS year,
 		if err := rows.Scan(
 			&row.Year,
 			&row.Month,
+			&row.ID,
+			&row.PayDate,
 			&row.SecurityID,
 			&row.SecurityName,
 			&row.SecurityISIN,
+			&row.OriginalAmount,
+			&row.OriginalCurrency,
+			&row.FXRate,
+			&row.DividendPerUnit,
+			&row.DividendCurrency,
 			&row.Gross,
 			&row.AfterWithholding,
 			&row.Net,
+			&row.InlandTaxAmount,
+			&row.InlandTaxCurrency,
 		); err != nil {
 			return nil, fmt.Errorf("scan dividend analysis year month security data row: %w", err)
 		}

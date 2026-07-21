@@ -229,19 +229,32 @@ type YearMonthSecurityDataPeriod struct {
 }
 
 type YearMonthSecurityDataRow struct {
-	SecurityID       int64  `json:"SecurityID"`
-	SecurityName     string `json:"SecurityName"`
-	SecurityISIN     string `json:"SecurityISIN"`
-	Gross            string `json:"Gross"`
-	AfterWithholding string `json:"AfterWithholding"`
-	Net              string `json:"Net"`
-	Type             string `json:"Type"`
+	SecurityID        int64                          `json:"SecurityID"`
+	SecurityName      string                         `json:"SecurityName"`
+	SecurityISIN      string                         `json:"SecurityISIN"`
+	Gross             string                         `json:"Gross"`
+	AfterWithholding  string                         `json:"AfterWithholding"`
+	Net               string                         `json:"Net"`
+	InlandTaxAmount   string                         `json:"InlandTaxAmount"`
+	InlandTaxCurrency string                         `json:"InlandTaxCurrency"`
+	Payments          []YearMonthSecurityDataPayment `json:"Payments"`
+	Type              string                         `json:"Type"`
+}
+
+type YearMonthSecurityDataPayment struct {
+	PayDate                 string `json:"PayDate"`
+	OriginalCurrency        string `json:"OriginalCurrency"`
+	OriginalAmount          string `json:"OriginalAmount"`
+	FXRate                  string `json:"FXRate"`
+	DividendPerUnit         string `json:"DividendPerUnit"`
+	DividendPerUnitCurrency string `json:"DividendPerUnitCurrency"`
 }
 
 type dividendsByYearTotals struct {
 	Gross            decimal.Decimal
 	AfterWithholding decimal.Decimal
 	Net              decimal.Decimal
+	InlandTaxAmount  decimal.Decimal
 	PaymentCount     int
 }
 
@@ -287,6 +300,8 @@ type dividendsByYearMonthSecurityGroup struct {
 	Gross            decimal.Decimal
 	AfterWithholding decimal.Decimal
 	Net              decimal.Decimal
+	InlandTaxAmount  decimal.Decimal
+	Payments         []YearMonthSecurityDataPayment
 }
 
 type securityMonthShareGroupKey struct {
@@ -1846,6 +1861,13 @@ func buildDividendsByYearMonthSecurityData(sourceRows []db.DividendsByYearMonthS
 		if err != nil {
 			return YearMonthSecurityDataResponseData{}, false
 		}
+		inlandTaxAmount := decimal.Zero
+		if strings.TrimSpace(sourceRow.InlandTaxAmount) != "" {
+			inlandTaxAmount, err = decimal.NewFromString(sourceRow.InlandTaxAmount)
+			if err != nil {
+				return YearMonthSecurityDataResponseData{}, false
+			}
+		}
 
 		key := dividendsByYearMonthSecurityGroupKey{
 			Year:         sourceRow.Year,
@@ -1858,12 +1880,22 @@ func buildDividendsByYearMonthSecurityData(sourceRows []db.DividendsByYearMonthS
 		if group == nil {
 			group = &dividendsByYearMonthSecurityGroup{
 				dividendsByYearMonthSecurityGroupKey: key,
+				Payments:                             make([]YearMonthSecurityDataPayment, 0),
 			}
 			groupsByKey[key] = group
 		}
 		group.Gross = group.Gross.Add(gross)
 		group.AfterWithholding = group.AfterWithholding.Add(afterWithholding)
 		group.Net = group.Net.Add(net)
+		group.InlandTaxAmount = group.InlandTaxAmount.Add(inlandTaxAmount)
+		group.Payments = append(group.Payments, YearMonthSecurityDataPayment{
+			PayDate:                 sourceRow.PayDate,
+			OriginalCurrency:        sourceRow.OriginalCurrency,
+			OriginalAmount:          displayformat.DecimalForLocale(sourceRow.OriginalAmount, locale),
+			FXRate:                  displayformat.DecimalForLocale(sourceRow.FXRate, locale),
+			DividendPerUnit:         displayformat.DecimalForLocale(sourceRow.DividendPerUnit, locale),
+			DividendPerUnitCurrency: sourceRow.DividendCurrency,
+		})
 	}
 
 	groups := make([]dividendsByYearMonthSecurityGroup, 0, len(groupsByKey))
@@ -1887,7 +1919,7 @@ func buildDividendsByYearMonthSecurityData(sourceRows []db.DividendsByYearMonthS
 		if currentPeriod == nil {
 			return
 		}
-		currentPeriod.Rows = append(currentPeriod.Rows, buildYearMonthSecurityDataSummaryRow(currentTotals, decimalPlaces, locale))
+		currentPeriod.Rows = append(currentPeriod.Rows, buildYearMonthSecurityDataSummaryRow(currentTotals, decimalPlaces, currency, locale))
 		data.Periods = append(data.Periods, *currentPeriod)
 	}
 
@@ -1907,10 +1939,11 @@ func buildDividendsByYearMonthSecurityData(sourceRows []db.DividendsByYearMonthS
 			}
 		}
 
-		currentPeriod.Rows = append(currentPeriod.Rows, buildYearMonthSecurityDataDetailRow(group, decimalPlaces, locale))
+		currentPeriod.Rows = append(currentPeriod.Rows, buildYearMonthSecurityDataDetailRow(group, decimalPlaces, currency, locale))
 		currentTotals.Gross = currentTotals.Gross.Add(group.Gross)
 		currentTotals.AfterWithholding = currentTotals.AfterWithholding.Add(group.AfterWithholding)
 		currentTotals.Net = currentTotals.Net.Add(group.Net)
+		currentTotals.InlandTaxAmount = currentTotals.InlandTaxAmount.Add(group.InlandTaxAmount)
 	}
 	appendSummary()
 
@@ -1938,27 +1971,33 @@ func dividendsByYearMonthSecurityGroupLess(left, right dividendsByYearMonthSecur
 	return left.SecurityID < right.SecurityID
 }
 
-func buildYearMonthSecurityDataDetailRow(group dividendsByYearMonthSecurityGroup, decimalPlaces int32, locale string) YearMonthSecurityDataRow {
+func buildYearMonthSecurityDataDetailRow(group dividendsByYearMonthSecurityGroup, decimalPlaces int32, currency, locale string) YearMonthSecurityDataRow {
 	return YearMonthSecurityDataRow{
-		SecurityID:       group.SecurityID,
-		SecurityName:     group.SecurityName,
-		SecurityISIN:     group.SecurityISIN,
-		Gross:            displayformat.DecimalForLocale(group.Gross.StringFixed(decimalPlaces), locale),
-		AfterWithholding: displayformat.DecimalForLocale(group.AfterWithholding.StringFixed(decimalPlaces), locale),
-		Net:              displayformat.DecimalForLocale(group.Net.StringFixed(decimalPlaces), locale),
-		Type:             "detail",
+		SecurityID:        group.SecurityID,
+		SecurityName:      group.SecurityName,
+		SecurityISIN:      group.SecurityISIN,
+		Gross:             displayformat.DecimalForLocale(group.Gross.StringFixed(decimalPlaces), locale),
+		AfterWithholding:  displayformat.DecimalForLocale(group.AfterWithholding.StringFixed(decimalPlaces), locale),
+		Net:               displayformat.DecimalForLocale(group.Net.StringFixed(decimalPlaces), locale),
+		InlandTaxAmount:   displayformat.DecimalForLocale(group.InlandTaxAmount.StringFixed(decimalPlaces), locale),
+		InlandTaxCurrency: currency,
+		Payments:          group.Payments,
+		Type:              "detail",
 	}
 }
 
-func buildYearMonthSecurityDataSummaryRow(totals dividendsByYearTotals, decimalPlaces int32, locale string) YearMonthSecurityDataRow {
+func buildYearMonthSecurityDataSummaryRow(totals dividendsByYearTotals, decimalPlaces int32, currency, locale string) YearMonthSecurityDataRow {
 	return YearMonthSecurityDataRow{
-		SecurityID:       0,
-		SecurityName:     "Monat Ergebnis",
-		SecurityISIN:     "",
-		Gross:            displayformat.DecimalForLocale(totals.Gross.StringFixed(decimalPlaces), locale),
-		AfterWithholding: displayformat.DecimalForLocale(totals.AfterWithholding.StringFixed(decimalPlaces), locale),
-		Net:              displayformat.DecimalForLocale(totals.Net.StringFixed(decimalPlaces), locale),
-		Type:             "summary",
+		SecurityID:        0,
+		SecurityName:      "Monat Ergebnis",
+		SecurityISIN:      "",
+		Gross:             displayformat.DecimalForLocale(totals.Gross.StringFixed(decimalPlaces), locale),
+		AfterWithholding:  displayformat.DecimalForLocale(totals.AfterWithholding.StringFixed(decimalPlaces), locale),
+		Net:               displayformat.DecimalForLocale(totals.Net.StringFixed(decimalPlaces), locale),
+		InlandTaxAmount:   displayformat.DecimalForLocale(totals.InlandTaxAmount.StringFixed(decimalPlaces), locale),
+		InlandTaxCurrency: currency,
+		Payments:          []YearMonthSecurityDataPayment{},
+		Type:              "summary",
 	}
 }
 

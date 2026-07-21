@@ -502,8 +502,8 @@ func TestBuildDividendsBySecurityYearData(t *testing.T) {
 func TestBuildDividendsByYearMonthSecurityData(t *testing.T) {
 	data, ok := buildDividendsByYearMonthSecurityData([]db.DividendsByYearMonthSecuritySourceRow{
 		{Year: "2024", Month: "01", SecurityID: 2, SecurityName: "Example Beta AG", SecurityISIN: "DE000BETA01", Gross: "5.00", AfterWithholding: "4.00", Net: "3.50"},
-		{Year: "2024", Month: "01", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "10.00", AfterWithholding: "8.00", Net: "7.50"},
-		{Year: "2024", Month: "01", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "20.00", AfterWithholding: "17.00", Net: "16.50"},
+		{ID: 10, PayDate: "2024-01-10", Year: "2024", Month: "01", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", OriginalAmount: "11.25", OriginalCurrency: "USD", FXRate: "1.125", DividendPerUnit: "0.45", DividendCurrency: "USD", Gross: "10.00", AfterWithholding: "8.00", Net: "7.50", InlandTaxAmount: "1.25", InlandTaxCurrency: "EUR"},
+		{ID: 11, PayDate: "2024-01-25", Year: "2024", Month: "01", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", OriginalAmount: "23.50", OriginalCurrency: "USD", FXRate: "1.175", DividendPerUnit: "0.47", DividendCurrency: "USD", Gross: "20.00", AfterWithholding: "17.00", Net: "16.50", InlandTaxAmount: "2.25", InlandTaxCurrency: "EUR"},
 		{Year: "2024", Month: "02", SecurityID: 1, SecurityName: "Example Alpha AG", SecurityISIN: "DE000ALPHA1", Gross: "7.00", AfterWithholding: "6.00", Net: "5.50"},
 	}, 2, "EUR", "en-US")
 	if !ok {
@@ -526,6 +526,21 @@ func TestBuildDividendsByYearMonthSecurityData(t *testing.T) {
 	assertYearMonthSecurityDataRow(t, data.Periods[0].Rows[2], 0, "Monat Ergebnis", "", "35.00", "29.00", "27.50", "summary")
 	assertYearMonthSecurityDataRow(t, data.Periods[1].Rows[0], 1, "Example Alpha AG", "DE000ALPHA1", "7.00", "6.00", "5.50", "detail")
 	assertYearMonthSecurityDataRow(t, data.Periods[1].Rows[1], 0, "Monat Ergebnis", "", "7.00", "6.00", "5.50", "summary")
+
+	alphaRow := data.Periods[0].Rows[0]
+	if alphaRow.InlandTaxAmount != "3.50" || alphaRow.InlandTaxCurrency != "EUR" {
+		t.Fatalf("alpha inland tax = %q %q, want 3.50 EUR", alphaRow.InlandTaxAmount, alphaRow.InlandTaxCurrency)
+	}
+	if len(alphaRow.Payments) != 2 {
+		t.Fatalf("alpha payments len = %d, want 2", len(alphaRow.Payments))
+	}
+	assertYearMonthSecurityDataPayment(t, alphaRow.Payments[0], "2024-01-10", "USD", "11.25", "1.125", "0.45", "USD")
+	assertYearMonthSecurityDataPayment(t, alphaRow.Payments[1], "2024-01-25", "USD", "23.50", "1.175", "0.47", "USD")
+
+	summaryRow := data.Periods[0].Rows[2]
+	if summaryRow.InlandTaxAmount != "3.50" || summaryRow.InlandTaxCurrency != "EUR" || len(summaryRow.Payments) != 0 {
+		t.Fatalf("summary inland tax/payments = %q %q/%d, want 3.50 EUR/0", summaryRow.InlandTaxAmount, summaryRow.InlandTaxCurrency, len(summaryRow.Payments))
+	}
 }
 
 func TestParseAnalysisYearMonthPeriods(t *testing.T) {
@@ -701,5 +716,17 @@ func assertYearMonthSecurityDataRow(t *testing.T, row YearMonthSecurityDataRow, 
 	}
 	if row.Type != rowType {
 		t.Fatalf("row Type = %q, want %q", row.Type, rowType)
+	}
+}
+
+func assertYearMonthSecurityDataPayment(t *testing.T, payment YearMonthSecurityDataPayment, payDate, originalCurrency, originalAmount, fxRate, dividendPerUnit, dividendPerUnitCurrency string) {
+	t.Helper()
+	if payment.PayDate != payDate ||
+		payment.OriginalCurrency != originalCurrency ||
+		payment.OriginalAmount != originalAmount ||
+		payment.FXRate != fxRate ||
+		payment.DividendPerUnit != dividendPerUnit ||
+		payment.DividendPerUnitCurrency != dividendPerUnitCurrency {
+		t.Fatalf("payment = %+v, want PayDate=%q OriginalCurrency=%q OriginalAmount=%q FXRate=%q DividendPerUnit=%q DividendPerUnitCurrency=%q", payment, payDate, originalCurrency, originalAmount, fxRate, dividendPerUnit, dividendPerUnitCurrency)
 	}
 }
